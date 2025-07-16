@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>X Scraper</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Tweet Search</h1>
+        <div class="search-container">
+            <input type="text" id="search-query-input" placeholder="Enter keyword or #hashtag">
+            <button id="search-btn">Search</button>
+        </div>
+        <div class="sort-container">
+            <button id="sort-by-date">Sort by Date</button>
+            <button id="sort-by-likes">Sort by Likes</button>
+            <button id="sort-by-retweets">Sort by Retweets</button>
+        </div>
+        <div id="results" class="results-container"></div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
