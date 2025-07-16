@@ -29,7 +29,8 @@ searchBtn.addEventListener('click', () => {
     const searchType = document.querySelector('input[name="search-type"]:checked').value;
 
     if (searchType === 'user') {
-        searchUser(query);
+        const username = query.startsWith('@') ? query.substring(1) : query;
+        searchUser(username);
     } else {
         searchTweets(query);
     }
