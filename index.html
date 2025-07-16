@@ -8,24 +8,33 @@
 </head>
 <body>
     <div class="container">
-        <h1>X Scraper</h1>
-        <div class="search-options">
-            <input type="radio" id="search-type-keyword" name="search-type" value="keyword" checked>
-            <label for="search-type-keyword">Keyword</label>
-            <input type="radio" id="search-type-user" name="search-type" value="user">
-            <label for="search-type-user">User</label>
-        </div>
+        <h1>Tweet Search</h1>
         <div class="search-container">
             <input type="text" id="search-query-input" placeholder="Enter keyword or #hashtag">
-            <button id="search-btn">Search</button>
+            <button id="search-btn" class="btn-primary">Search</button>
         </div>
-        <div id="user-profile" class="user-profile-container"></div>
-        <div class="sort-container">
-            <button id="sort-by-date">Sort by Date</button>
-            <button id="sort-by-likes">Sort by Likes</button>
-            <button id="sort-by-retweets">Sort by Retweets</button>
+        <div class="sort-container" id="keyword-sort-container" style="display: none;">
+            <button id="sort-by-date" class="btn-secondary">Sort by Date</button>
+            <button id="sort-by-likes" class="btn-secondary">Sort by Likes</button>
+            <button id="sort-by-retweets" class="btn-secondary">Sort by Retweets</button>
         </div>
-        <div id="results" class="results-container"></div>
+        <div id="tweet-search-results" class="results-container"></div>
+
+        <hr>
+
+        <h1>User Profile Search</h1>
+        <div class="search-container">
+            <input type="text" id="user-search-input" placeholder="Username (e.g., elonmusk)">
+            <input type="text" id="user-keyword-input" placeholder="Keyword (optional)">
+            <button id="user-search-btn" class="btn-primary">Search</button>
+        </div>
+        <div id="user-profile"></div>
+        <div class="sort-container" id="user-sort-container" style="display: none;">
+            <button id="user-sort-by-date" class="btn-secondary">Sort by Date</button>
+            <button id="user-sort-by-likes" class="btn-secondary">Sort by Likes</button>
+            <button id="user-sort-by-retweets" class="btn-secondary">Sort by Retweets</button>
+        </div>
+        <div id="user-tweets" class="results-container"></div>
     </div>
     <script src="script.js"></script>
 </body>

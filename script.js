@@ -1,181 +1,172 @@
 const apiKey = '4aaf9685f9msh91bb6936661eb07p1a7da5jsn7ff9f3fe3216';
 const apiHost = 'twitter-api45.p.rapidapi.com';
 
+// --- DOM Elements ---
 const searchBtn = document.getElementById('search-btn');
 const searchQueryInput = document.getElementById('search-query-input');
-const resultsContainer = document.getElementById('results');
-const userProfileContainer = document.getElementById('user-profile');
+const tweetSearchResultsContainer = document.getElementById('tweet-search-results');
+const keywordSortContainer = document.getElementById('keyword-sort-container');
 const sortByDateBtn = document.getElementById('sort-by-date');
 const sortByLikesBtn = document.getElementById('sort-by-likes');
 const sortByRetweetsBtn = document.getElementById('sort-by-retweets');
-const searchTypeKeywordRadio = document.getElementById('search-type-keyword');
-const searchTypeUserRadio = document.getElementById('search-type-user');
 
-searchTypeKeywordRadio.addEventListener('change', () => {
-    searchQueryInput.placeholder = 'Enter keyword or #hashtag';
-});
+const userSearchBtn = document.getElementById('user-search-btn');
+const userSearchInput = document.getElementById('user-search-input');
+const userKeywordInput = document.getElementById('user-keyword-input');
+const userProfileContainer = document.getElementById('user-profile');
+const userTweetsContainer = document.getElementById('user-tweets');
+const userSortContainer = document.getElementById('user-sort-container');
+const userSortByDateBtn = document.getElementById('user-sort-by-date');
+const userSortByLikesBtn = document.getElementById('user-sort-by-likes');
+const userSortByRetweetsBtn = document.getElementById('user-sort-by-retweets');
 
-searchTypeUserRadio.addEventListener('change', () => {
-    searchQueryInput.placeholder = 'Enter username';
-});
+// --- State ---
+let currentKeywordTweets = [];
+let currentUserTweets = [];
 
+// --- Generic Fetch Function ---
+async function fetchFromAPI(endpoint, params) {
+    const url = new URL(`https://${apiHost}${endpoint}`);
+    url.search = new URLSearchParams(params).toString();
+
+    const options = {
+        method: 'GET',
+        headers: {
+            'X-RapidAPI-Key': apiKey,
+            'X-RapidAPI-Host': apiHost
+        }
+    };
+
+    const response = await fetch(url, options);
+    if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+    return await response.json();
+}
+
+// --- Generic Tweet Display Function ---
+function displayTweets(tweets, container, title) {
+    if (!tweets || tweets.length === 0) {
+        container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
+        return;
+    }
+
+    const tweetsHtml = tweets.map(tweet => `
+        <div class="tweet-card">
+            <p><strong>@${tweet.screen_name}:</strong> ${tweet.text}</p>
+            <div class="tweet-footer">
+                <span>❤️ ${tweet.favorites || 0}</span>
+                <span>🔁 ${tweet.retweets || 0}</span>
+                <span>💬 ${tweet.replies || 0}</span>
+                <span>${new Date(tweet.created_at).toLocaleString()}</span>
+            </div>
+        </div>
+    `).join('');
+
+    container.innerHTML = `<h3>${title}</h3>${tweetsHtml}`;
+}
+
+// --- Tweet Search Feature ---
 searchBtn.addEventListener('click', () => {
     const query = searchQueryInput.value.trim();
-    if (!query) return;
-
-    resultsContainer.innerHTML = '<p>Loading...</p>';
-    userProfileContainer.innerHTML = '';
-
-    const searchType = document.querySelector('input[name="search-type"]:checked').value;
-
-    if (searchType === 'user') {
-        const username = query.startsWith('@') ? query.substring(1) : query;
-        searchUser(username);
-    } else {
+    if (query) {
+        tweetSearchResultsContainer.innerHTML = '<p>Loading...</p>';
         searchTweets(query);
     }
 });
 
-let currentTweets = [];
-
-async function searchUser(username) {
-    searchBtn.disabled = true;
-    try {
-        const [userProfile, userTweets] = await Promise.all([
-            fetchUserProfile(username),
-            fetchUserTweets(username)
-        ]);
-
-        displayUserProfile(userProfile);
-        currentTweets = userTweets;
-        displayTweets(userTweets);
-
-    } catch (error) {
-        handleSearchError(error);
-    } finally {
-        searchBtn.disabled = false;
-    }
-}
-
 async function searchTweets(query) {
     searchBtn.disabled = true;
+    keywordSortContainer.style.display = 'none';
     try {
-        const tweets = await fetchTweetsByQuery(query);
-        currentTweets = tweets;
-        displayTweets(tweets);
+        const data = await fetchFromAPI('/search.php', { query });
+        currentKeywordTweets = data.timeline || [];
+        displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
+        if (currentKeywordTweets.length > 0) {
+            keywordSortContainer.style.display = 'flex';
+        }
     } catch (error) {
-        handleSearchError(error);
+        console.error('Error searching tweets:', error);
+        tweetSearchResultsContainer.innerHTML = `<p class="error">Failed to fetch tweets. Please try again.</p>`;
     } finally {
         searchBtn.disabled = false;
     }
 }
 
-function handleSearchError(error) {
-    console.error(error);
-    let errorMessage = 'An unexpected error occurred. Please try again.';
-    if (error.message.includes('Status: 404')) {
-        errorMessage = 'User or tweets not found. Please check the username or keyword.';
-    } else if (error.message.includes('Status: 429')) {
-        errorMessage = 'You have exceeded the API rate limit. Please wait a moment before trying again.';
-    } else if (error.message.includes('Status: 500')) {
-        errorMessage = 'The Twitter data service is temporarily unavailable (Error 500). Please try again later.';
-    } else if (error.message.includes('Failed to fetch')) {
-        errorMessage = 'Could not connect to the Twitter data service. Please check your internet connection and try again.';
-    }
-    resultsContainer.innerHTML = `<p>${errorMessage}</p>`;
-}
-
+// --- Sorting for Keyword Search ---
 sortByDateBtn.addEventListener('click', () => {
-    currentTweets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    displayTweets(currentTweets);
+    currentKeywordTweets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
 });
 
 sortByLikesBtn.addEventListener('click', () => {
-    currentTweets.sort((a, b) => b.favorites - a.favorites);
-    displayTweets(currentTweets);
+    currentKeywordTweets.sort((a, b) => (b.favorites || 0) - (a.favorites || 0));
+    displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
 });
 
 sortByRetweetsBtn.addEventListener('click', () => {
-    currentTweets.sort((a, b) => b.retweets - a.retweets);
-    displayTweets(currentTweets);
+    currentKeywordTweets.sort((a, b) => (b.retweets || 0) - (a.retweets || 0));
+    displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
 });
 
-const fetchTweetsByQuery = async (query) => {
-    const encodedQuery = encodeURIComponent(query);
-    const url = `https://${apiHost}/search.php?query=${encodedQuery}`;
-    return await apiRequest(url);
-};
+// --- User Profile Search Feature ---
+userSearchBtn.addEventListener('click', async () => {
+    const username = userSearchInput.value.trim();
+    const keyword = userKeywordInput.value.trim();
 
-const fetchUserProfile = async (username) => {
-    const url = `https://${apiHost}/userinfo.php?user=${username}`;
-    return await apiRequest(url);
-};
-
-const fetchUserTweets = async (username) => {
-    const url = `https://${apiHost}/usertweet.php?user=${username}`;
-    const result = await apiRequest(url);
-    return result.timeline || [];
-};
-
-const apiRequest = async (url) => {
-    const options = {
-        method: 'GET',
-        headers: {
-            'x-rapidapi-key': apiKey,
-            'x-rapidapi-host': apiHost
-        }
-    };
-    const response = await fetch(url, options);
-    if (!response.ok) {
-        throw new Error(`Failed to fetch data. Status: ${response.status}`);
-    }
-    return await response.json();
-};
-
-function displayUserProfile(profile) {
-    if (!profile || !profile.screen_name) {
-        userProfileContainer.innerHTML = '<p>Could not load user profile.</p>';
+    if (!username) {
+        alert('Please enter a username.');
         return;
     }
 
-    const profileHtml = `
-        <div class="user-profile-card">
-            <img src="${profile.profile_image_url_https}" alt="Profile picture of ${profile.screen_name}" class="profile-image">
-            <div class="profile-info">
-                <h3>${profile.name}</h3>
-                <p>@${profile.screen_name}</p>
-                <p>${profile.description}</p>
-                <div class="profile-stats">
-                    <span><strong>Following:</strong> ${profile.friends_count}</span>
-                    <span><strong>Followers:</strong> ${profile.followers_count}</span>
-                    <span><strong>Listed:</strong> ${profile.listed_count}</span>
-                </div>
-            </div>
-        </div>
-    `;
-    userProfileContainer.innerHTML = profileHtml;
-}
+    userProfileContainer.innerHTML = ''; // Clear profile section
+    userTweetsContainer.innerHTML = '<p>Loading user tweets...</p>';
+    userSortContainer.style.display = 'none';
+    userSearchBtn.disabled = true;
 
-function displayTweets(tweets) {
-    resultsContainer.innerHTML = ''; // Clear previous results before displaying new ones
-    let tweetsHtml = '<h3>Search Results</h3>';
-    if (Array.isArray(tweets) && tweets.length > 0) {
-        tweets.forEach(tweet => {
-            // Using the correct fields from the new API response
-            tweetsHtml += `
-                <div class="tweet-card">
-                    <p><strong>@${tweet.screen_name}:</strong> ${tweet.text}</p>
-                    <div class="tweet-footer">
-                        <span>❤️ ${tweet.favorites || 0}</span>
-                        <span>🔁 ${tweet.retweets || 0}</span>
-                        <span>💬 ${tweet.replies || 0}</span>
-                        <span>${new Date(tweet.created_at).toLocaleString()}</span>
-                    </div>
-                </div>
-            `;
-        });
-    } else {
-        tweetsHtml += '<p>No tweets found for this query.</p>';
+    try {
+        let query = `from:${username}`;
+        if (keyword) {
+            query = `${keyword} ${query}`;
+        }
+
+        const tweetsData = await fetchFromAPI('/search.php', { query });
+
+        let title = `Tweets from @${username}`;
+        if (keyword) {
+            title += ` containing "${keyword}"`;
+        }
+
+        if (tweetsData && tweetsData.timeline && tweetsData.timeline.length > 0) {
+            currentUserTweets = tweetsData.timeline;
+            displayTweets(currentUserTweets, userTweetsContainer, title);
+            userProfileContainer.innerHTML = `<h2>${title}</h2>`;
+            userSortContainer.style.display = 'flex'; // Show sort buttons
+        } else {
+            userTweetsContainer.innerHTML = `<p class="error">No tweets found for this search.</p>`;
+            userProfileContainer.innerHTML = '';
+        }
+    } catch (error) {
+        console.error('Error searching user:', error);
+        userProfileContainer.innerHTML = '';
+        userTweetsContainer.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+    } finally {
+        userSearchBtn.disabled = false;
     }
-    resultsContainer.innerHTML = tweetsHtml;
-}
+});
+
+// --- Sorting for User Search ---
+userSortByDateBtn.addEventListener('click', () => {
+    currentUserTweets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    displayTweets(currentUserTweets, userTweetsContainer, `Tweets from @${userSearchInput.value.trim()}`);
+});
+
+userSortByLikesBtn.addEventListener('click', () => {
+    currentUserTweets.sort((a, b) => (b.favorites || 0) - (a.favorites || 0));
+    displayTweets(currentUserTweets, userTweetsContainer, `Tweets from @${userSearchInput.value.trim()}`);
+});
+
+userSortByRetweetsBtn.addEventListener('click', () => {
+    currentUserTweets.sort((a, b) => (b.retweets || 0) - (a.retweets || 0));
+    displayTweets(currentUserTweets, userTweetsContainer, `Tweets from @${userSearchInput.value.trim()}`);
+});
