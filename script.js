@@ -93,14 +93,23 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     showLoading(container);
     try {
         const data = await fetchFromAPI('/search-v2', { query, type, count });
-        console.log('🔍 Search response structure:', Object.keys(data));
+        console.log('🔍 Raw API response:', data);
         
-        // Try different possible data structures
-        let tweets = data.result?.timeline || data.timeline || data.tweets || [];
+        // Extract tweets from complex nested structure
+        let tweets = [];
         
-        // If still not an array, check nested structures
-        if (!Array.isArray(tweets) && data.result) {
-            tweets = Object.values(data.result).find(val => Array.isArray(val)) || [];
+        // Navigate: data.result.timeline.instructions[0].entries
+        const instructions = data.result?.timeline?.instructions || [];
+        if (instructions.length > 0) {
+            const entries = instructions[0].entries || [];
+            console.log(`Found ${entries.length} entries`);
+            
+            // Extract tweets from entries
+            tweets = entries
+                .filter(entry => entry.content?.itemContent?.tweet_results?.result)
+                .map(entry => entry.content.itemContent.tweet_results.result);
+            
+            console.log(`Extracted ${tweets.length} tweets`);
         }
         
         displayTweets(tweets, container, `Search Results for "${query}"`);
@@ -176,7 +185,18 @@ async function getUserContent(type) {
         const userId = userData.result?.data?.user?.result?.rest_id || userData.result?.id_str;
         if (!userId) throw new Error('Could not get user ID');
         const data = await fetchFromAPI(endpoints[type], { user: userId, count });
-        displayTweets(data.result?.timeline || data.timeline || [], container, `${type.charAt(0).toUpperCase() + type.slice(1)} from @${username}`);
+        
+        // Extract tweets from nested structure
+        let tweets = [];
+        const instructions = data.result?.timeline?.instructions || [];
+        if (instructions.length > 0) {
+            const entries = instructions[0].entries || [];
+            tweets = entries
+                .filter(entry => entry.content?.itemContent?.tweet_results?.result)
+                .map(entry => entry.content.itemContent.tweet_results.result);
+        }
+        
+        displayTweets(tweets, container, `${type.charAt(0).toUpperCase() + type.slice(1)} from @${username}`);
     } catch (error) { showError(container, error.message); }
 }
 
@@ -192,7 +212,18 @@ async function getUserNetwork(type) {
         const userId = userData.result?.data?.user?.result?.rest_id || userData.result?.id_str;
         if (!userId) throw new Error('Could not get user ID');
         const data = await fetchFromAPI(endpoints[type], { user: userId, count });
-        displayUsers(data.result?.timeline || data.timeline || [], container, `${type.charAt(0).toUpperCase() + type.slice(1)} of @${username}`);
+        
+        // Extract users from nested structure
+        let users = [];
+        const instructions = data.result?.timeline?.instructions || [];
+        if (instructions.length > 0) {
+            const entries = instructions[0].entries || [];
+            users = entries
+                .filter(entry => entry.content?.itemContent?.user_results?.result)
+                .map(entry => entry.content.itemContent.user_results.result);
+        }
+        
+        displayUsers(users, container, `${type.charAt(0).toUpperCase() + type.slice(1)} of @${username}`);
     } catch (error) { showError(container, error.message); }
 }
 
