@@ -200,32 +200,65 @@ async function getUserContent(type) {
 function extractTweetsFromResponse(data) {
     let tweets = [];
     
-    // Try structure 1: data.result.timeline.instructions[0].entries
+    console.log('🔬 Extracting tweets from data with keys:', Object.keys(data));
+    console.log('🔬 Full data structure:', JSON.stringify(data, null, 2).substring(0, 500));
+    
+    // Try structure 1: data.result.timeline.instructions
     const instructions = data.result?.timeline?.instructions || [];
+    console.log(`📋 Found ${instructions.length} instructions`);
     if (instructions.length > 0) {
         for (const instruction of instructions) {
+            console.log(`  - Instruction type: ${instruction.type}`);
             if (instruction.type === 'TimelineAddEntries' && instruction.entries) {
                 const entries = instruction.entries.filter(entry => 
                     entry.content?.itemContent?.tweet_results?.result ||
                     entry.content?.itemContent?.tweetDisplayType === 'Tweet'
                 );
+                console.log(`  - Found ${entries.length} tweet entries`);
                 tweets.push(...entries.map(entry => entry.content.itemContent.tweet_results.result));
             }
         }
     }
     
-    // Try structure 2: data.data (for some endpoints)
+    // Try structure 2: data.data
     if (tweets.length === 0 && data.data) {
+        console.log('📦 Trying data.data structure');
         const dataArray = Array.isArray(data.data) ? data.data : Object.values(data.data);
-        tweets = dataArray.filter(item => item && (item.text || item.full_text));
+        console.log(`  - Data array length: ${dataArray.length}`);
+        tweets = dataArray.filter(item => item && (item.text || item.full_text || item.legacy?.full_text));
     }
     
     // Try structure 3: direct timeline
     if (tweets.length === 0 && data.timeline) {
+        console.log('📜 Trying data.timeline structure');
         tweets = Array.isArray(data.timeline) ? data.timeline : [];
     }
     
-    return tweets.filter(t => t); // Remove null/undefined
+    // Try structure 4: Check if data itself is an array
+    if (tweets.length === 0 && Array.isArray(data)) {
+        console.log('📚 Data itself is an array');
+        tweets = data;
+    }
+    
+    // Try structure 5: Look for any array in the response
+    if (tweets.length === 0) {
+        console.log('🔍 Searching for arrays in response...');
+        for (const [key, value] of Object.entries(data)) {
+            if (Array.isArray(value) && value.length > 0) {
+                console.log(`  - Found array at key "${key}" with ${value.length} items`);
+                // Check if it looks like tweets
+                if (value[0] && (value[0].text || value[0].full_text || value[0].legacy)) {
+                    console.log(`  - Looks like tweets! Using array from "${key}"`);
+                    tweets = value;
+                    break;
+                }
+            }
+        }
+    }
+    
+    const filtered = tweets.filter(t => t);
+    console.log(`✅ Final tweet count: ${filtered.length}`);
+    return filtered;
 }
 
 async function getUserNetwork(type) {
