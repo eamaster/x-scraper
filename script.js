@@ -118,13 +118,16 @@ document.getElementById('get-user-btn').addEventListener('click', async () => {
         const data = await fetchFromAPI('/user', { username });
         const user = data.result?.data?.user?.result?.legacy || data.result;
         if (!user) { showError(container, 'User not found'); return; }
+        const profileImageUrl = user.profile_image_url_https || user.profile_image_url || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+        const profileImageBigger = profileImageUrl.replace('_normal', '_400x400');
+        
         container.innerHTML = `
             <div class="profile-card">
                 <div class="profile-header">
-                    <img src="${user.profile_image_url_https || 'https://via.placeholder.com/80'}" alt="${user.name}" width="80" height="80">
+                    <img src="${profileImageBigger}" alt="${user.name || 'User'}" width="80" height="80" onerror="this.src='https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'">
                     <div class="profile-info">
-                        <h2>${user.name} ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</h2>
-                        <p>@${user.screen_name}</p>
+                        <h2>${user.name || 'Unknown'} ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</h2>
+                        <p>@${user.screen_name || 'unknown'}</p>
                     </div>
                 </div>
                 <p>${user.description || 'No description'}</p>
