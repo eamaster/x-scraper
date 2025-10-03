@@ -153,8 +153,16 @@
             
             <h3>Trends by Location</h3>
             <div class="search-container">
-                <input type="text" id="trend-woeid-input" placeholder="WOEID (e.g., 2424766 for Qatar)">
+                <input type="text" id="trend-woeid-input" placeholder="Enter WOEID number (e.g., 2424766)">
                 <button id="get-trends-btn" class="btn-primary">Get Trends</button>
+            </div>
+            <div style="margin: 10px 0; padding: 10px; background: #f0f8ff; border-radius: 6px;">
+                <strong>💡 Common WOEIDs:</strong><br>
+                <button class="btn-secondary" style="margin: 5px; padding: 8px 15px;" onclick="document.getElementById('trend-woeid-input').value='1'; document.getElementById('get-trends-btn').click();">Worldwide (1)</button>
+                <button class="btn-secondary" style="margin: 5px; padding: 8px 15px;" onclick="document.getElementById('trend-woeid-input').value='2424766'; document.getElementById('get-trends-btn').click();">Qatar (2424766)</button>
+                <button class="btn-secondary" style="margin: 5px; padding: 8px 15px;" onclick="document.getElementById('trend-woeid-input').value='23424977'; document.getElementById('get-trends-btn').click();">USA (23424977)</button>
+                <button class="btn-secondary" style="margin: 5px; padding: 8px 15px;" onclick="document.getElementById('trend-woeid-input').value='23424975'; document.getElementById('get-trends-btn').click();">UK (23424975)</button>
+                <button class="btn-secondary" style="margin: 5px; padding: 8px 15px;" onclick="document.getElementById('trend-woeid-input').value='615702'; document.getElementById('get-trends-btn').click();">Paris (615702)</button>
             </div>
             <div id="trends-results" class="results-container"></div>
         </div>
