@@ -1,197 +1,462 @@
 // Configuration
-// Cloudflare Worker URL (API key is stored securely in Cloudflare)
 const WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
 
-// For local development with API key, create a config.js file (see config.example.js)
-// and uncomment the line below:
-// const WORKER_URL = null; // This will use direct API calls with config.js
+// ====================
+// UTILITY FUNCTIONS
+// ====================
 
-// --- DOM Elements ---
-const searchBtn = document.getElementById('search-btn');
-const searchQueryInput = document.getElementById('search-query-input');
-const tweetSearchResultsContainer = document.getElementById('tweet-search-results');
-const keywordSortContainer = document.getElementById('keyword-sort-container');
-const sortByDateBtn = document.getElementById('sort-by-date');
-const sortByLikesBtn = document.getElementById('sort-by-likes');
-const sortByRetweetsBtn = document.getElementById('sort-by-retweets');
-
-const userSearchBtn = document.getElementById('user-search-btn');
-const userSearchInput = document.getElementById('user-search-input');
-const userKeywordInput = document.getElementById('user-keyword-input');
-const userProfileContainer = document.getElementById('user-profile');
-const userTweetsContainer = document.getElementById('user-tweets');
-const userSortContainer = document.getElementById('user-sort-container');
-const userSortByDateBtn = document.getElementById('user-sort-by-date');
-const userSortByLikesBtn = document.getElementById('user-sort-by-likes');
-const userSortByRetweetsBtn = document.getElementById('user-sort-by-retweets');
-
-// --- State ---
-let currentKeywordTweets = [];
-let currentUserTweets = [];
-
-// --- Generic Fetch Function ---
-async function fetchFromAPI(endpoint, params) {
-    // Check if using Cloudflare Worker proxy
+async function fetchFromAPI(endpoint, params = {}) {
     if (WORKER_URL && WORKER_URL !== 'YOUR_CLOUDFLARE_WORKER_URL') {
-        // Use Cloudflare Worker as proxy
         const url = new URL(WORKER_URL);
         url.searchParams.set('endpoint', endpoint);
-        url.searchParams.set('query', params.query);
-
-        const response = await fetch(url.toString(), {
-            method: 'GET',
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== null && value !== undefined && value !== '') {
+                url.searchParams.set(key, value);
+            }
         });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-        }
+        const response = await fetch(url.toString(), { method: 'GET' });
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
         return await response.json();
     } else if (typeof window.API_CONFIG !== 'undefined') {
-        // Fallback to direct API call for local development (requires config.js)
         const url = new URL(`https://${window.API_CONFIG.host}${endpoint}`);
-        url.search = new URLSearchParams(params).toString();
-
-        const options = {
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== null && value !== undefined && value !== '') {
+                url.searchParams.set(key, value);
+            }
+        });
+        const response = await fetch(url.toString(), {
             method: 'GET',
             headers: {
                 'X-RapidAPI-Key': window.API_CONFIG.key,
                 'X-RapidAPI-Host': window.API_CONFIG.host
             }
-        };
-
-        const response = await fetch(url, options);
-        if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
-        }
+        });
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
         return await response.json();
     } else {
-        throw new Error('API configuration not found. Please set up your Cloudflare Worker URL or create config.js for local development.');
+        throw new Error('API configuration not found');
     }
 }
 
-// --- Generic Tweet Display Function ---
+function showLoading(container) {
+    container.innerHTML = '<div class="loading">Loading</div>';
+}
+
+function showError(container, message) {
+    container.innerHTML = `<div class="error">❌ Error: ${message}</div>`;
+}
+
+function formatNumber(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num;
+}
+
+function formatDate(dateString) {
+    return new Date(dateString).toLocaleString();
+}
+
+// ====================
+// TAB NAVIGATION
+// ====================
+
+document.querySelectorAll('.tab-btn').forEach(button => {
+    button.addEventListener('click', () => {
+        const tab = button.dataset.tab;
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        button.classList.add('active');
+        document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+        document.getElementById(`${tab}-tab`).classList.add('active');
+    });
+});
+
+// ====================
+// SEARCH TAB
+// ====================
+
+document.getElementById('search-btn').addEventListener('click', async () => {
+    const query = document.getElementById('search-query').value.trim();
+    const type = document.getElementById('search-type').value;
+    const count = document.getElementById('search-count').value || 20;
+    const container = document.getElementById('search-results');
+    if (!query) { showError(container, 'Please enter a search query'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/search-v2', { query, type, count });
+        displayTweets(data.result?.timeline || [], container, `Search Results for "${query}"`);
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('autocomplete-btn').addEventListener('click', async () => {
+    const value = document.getElementById('autocomplete-input').value.trim();
+    const container = document.getElementById('search-results');
+    if (!value) { showError(container, 'Please enter text'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/autocomplete', { value });
+        const suggestions = data.users || [];
+        if (suggestions.length === 0) { container.innerHTML = '<p>No suggestions found</p>'; return; }
+        container.innerHTML = `<h3>Autocomplete Suggestions</h3>${suggestions.map(user => `
+            <div class="user-card"><strong>@${user.screen_name}</strong> - ${user.name}
+            ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</div>`).join('')}`;
+    } catch (error) { showError(container, error.message); }
+});
+
+// ====================
+// USER TAB
+// ====================
+
+let currentUsername = '';
+
+document.getElementById('get-user-btn').addEventListener('click', async () => {
+    const username = document.getElementById('username-input').value.trim();
+    const container = document.getElementById('user-profile');
+    if (!username) { showError(container, 'Please enter a username'); return; }
+    currentUsername = username;
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/user', { username });
+        const user = data.result?.data?.user?.result?.legacy || data.result;
+        if (!user) { showError(container, 'User not found'); return; }
+        container.innerHTML = `
+            <div class="profile-card">
+                <div class="profile-header">
+                    <img src="${user.profile_image_url_https || 'https://via.placeholder.com/80'}" alt="${user.name}" width="80" height="80">
+                    <div class="profile-info">
+                        <h2>${user.name} ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</h2>
+                        <p>@${user.screen_name}</p>
+                    </div>
+                </div>
+                <p>${user.description || 'No description'}</p>
+                <div class="profile-stats">
+                    <div class="stat"><span class="stat-value">${formatNumber(user.statuses_count || 0)}</span><span class="stat-label">Tweets</span></div>
+                    <div class="stat"><span class="stat-value">${formatNumber(user.followers_count || 0)}</span><span class="stat-label">Followers</span></div>
+                    <div class="stat"><span class="stat-value">${formatNumber(user.friends_count || 0)}</span><span class="stat-label">Following</span></div>
+                    <div class="stat"><span class="stat-value">${formatNumber(user.favourites_count || 0)}</span><span class="stat-label">Likes</span></div>
+                </div>
+            </div>`;
+    } catch (error) { showError(container, error.message); }
+});
+
+async function getUserContent(type) {
+    const username = document.getElementById('username-input').value.trim() || currentUsername;
+    const count = document.getElementById('user-count').value || 20;
+    const container = document.getElementById('user-results');
+    if (!username) { showError(container, 'Please enter a username first'); return; }
+    showLoading(container);
+    const endpoints = { tweets: '/user-tweets', replies: '/user-replies-v2', media: '/user-media', likes: '/user-likes' };
+    try {
+        const userData = await fetchFromAPI('/user', { username });
+        const userId = userData.result?.data?.user?.result?.rest_id || userData.result?.id_str;
+        if (!userId) throw new Error('Could not get user ID');
+        const data = await fetchFromAPI(endpoints[type], { user: userId, count });
+        displayTweets(data.result?.timeline || data.timeline || [], container, `${type.charAt(0).toUpperCase() + type.slice(1)} from @${username}`);
+    } catch (error) { showError(container, error.message); }
+}
+
+async function getUserNetwork(type) {
+    const username = document.getElementById('username-input').value.trim() || currentUsername;
+    const count = document.getElementById('user-count').value || 20;
+    const container = document.getElementById('user-results');
+    if (!username) { showError(container, 'Please enter a username first'); return; }
+    showLoading(container);
+    const endpoints = { followers: '/followers', following: '/followings', verified: '/verified-followers' };
+    try {
+        const userData = await fetchFromAPI('/user', { username });
+        const userId = userData.result?.data?.user?.result?.rest_id || userData.result?.id_str;
+        if (!userId) throw new Error('Could not get user ID');
+        const data = await fetchFromAPI(endpoints[type], { user: userId, count });
+        displayUsers(data.result?.timeline || data.timeline || [], container, `${type.charAt(0).toUpperCase() + type.slice(1)} of @${username}`);
+    } catch (error) { showError(container, error.message); }
+}
+
+document.getElementById('get-user-tweets-btn').addEventListener('click', () => getUserContent('tweets'));
+document.getElementById('get-user-replies-btn').addEventListener('click', () => getUserContent('replies'));
+document.getElementById('get-user-media-btn').addEventListener('click', () => getUserContent('media'));
+document.getElementById('get-user-likes-btn').addEventListener('click', () => getUserContent('likes'));
+document.getElementById('get-user-followers-btn').addEventListener('click', () => getUserNetwork('followers'));
+document.getElementById('get-user-following-btn').addEventListener('click', () => getUserNetwork('following'));
+document.getElementById('get-verified-followers-btn').addEventListener('click', () => getUserNetwork('verified'));
+
+// ====================
+// TWEET TAB
+// ====================
+
+let currentTweetId = '';
+
+document.getElementById('get-tweet-btn').addEventListener('click', async () => {
+    const tweetId = document.getElementById('tweet-id-input').value.trim();
+    const container = document.getElementById('tweet-details');
+    if (!tweetId) { showError(container, 'Please enter a tweet ID'); return; }
+    currentTweetId = tweetId;
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/tweet-v2', { pid: tweetId });
+        displayTweets([data.result || data], container, 'Tweet Details');
+    } catch (error) { showError(container, error.message); }
+});
+
+async function getTweetInteractions(type) {
+    const tweetId = document.getElementById('tweet-id-input').value.trim() || currentTweetId;
+    const count = document.getElementById('tweet-count').value || 40;
+    const container = document.getElementById('tweet-interactions');
+    if (!tweetId) { showError(container, 'Please enter a tweet ID first'); return; }
+    showLoading(container);
+    const endpoints = { comments: '/comments-v2', retweets: '/retweets', quotes: '/quotes', likes: '/likes' };
+    try {
+        const params = { pid: tweetId, count };
+        if (type === 'comments') params.rankingMode = 'Relevance';
+        const data = await fetchFromAPI(endpoints[type], params);
+        const items = data.result?.timeline || data.timeline || [];
+        if (type === 'likes') { displayUsers(items, container, type.charAt(0).toUpperCase() + type.slice(1)); }
+        else { displayTweets(items, container, type.charAt(0).toUpperCase() + type.slice(1)); }
+    } catch (error) { showError(container, error.message); }
+}
+
+document.getElementById('get-comments-btn').addEventListener('click', () => getTweetInteractions('comments'));
+document.getElementById('get-retweets-btn').addEventListener('click', () => getTweetInteractions('retweets'));
+document.getElementById('get-quotes-btn').addEventListener('click', () => getTweetInteractions('quotes'));
+document.getElementById('get-likes-btn').addEventListener('click', () => getTweetInteractions('likes'));
+
+// ====================
+// COMMUNITY TAB
+// ====================
+
+document.getElementById('search-community-btn').addEventListener('click', async () => {
+    const query = document.getElementById('community-search-input').value.trim();
+    const container = document.getElementById('community-results');
+    if (!query) { showError(container, 'Please enter a search query'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/search-community', { query, count: 20 });
+        displayCommunities(data.result?.timeline || data.list || [], container, `Communities for "${query}"`);
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-community-topics-btn').addEventListener('click', async () => {
+    const container = document.getElementById('community-results');
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/community-topics', {});
+        displayGenericResults(data, container, 'Community Topics');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('explore-community-timeline-btn').addEventListener('click', async () => {
+    const container = document.getElementById('community-results');
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/explore-community-timeline', {});
+        displayTweets(data.result?.timeline || [], container, 'Community Timeline');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-community-details-btn').addEventListener('click', async () => {
+    const communityId = document.getElementById('community-id-input').value.trim();
+    const container = document.getElementById('community-results');
+    if (!communityId) { showError(container, 'Please enter a community ID'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/community-details', { communityId });
+        displayGenericResults(data, container, 'Community Details');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-community-tweets-btn').addEventListener('click', async () => {
+    const communityId = document.getElementById('community-id-input').value.trim();
+    const container = document.getElementById('community-results');
+    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/community-tweets', { communityId, searchType: 'Default', rankingMode: 'Relevance', count: 20 });
+        displayTweets(data.result?.timeline || [], container, 'Community Tweets');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-community-members-btn').addEventListener('click', async () => {
+    const communityId = document.getElementById('community-id-input').value.trim();
+    const container = document.getElementById('community-results');
+    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/community-members', { communityId });
+        displayGenericResults(data, container, 'Community Members');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-community-moderators-btn').addEventListener('click', async () => {
+    const communityId = document.getElementById('community-id-input').value.trim();
+    const container = document.getElementById('community-results');
+    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/community-moderators', { communityId });
+        displayGenericResults(data, container, 'Community Moderators');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-community-about-btn').addEventListener('click', async () => {
+    const communityId = document.getElementById('community-id-input').value.trim();
+    const container = document.getElementById('community-results');
+    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/community-about', { communityId });
+        displayGenericResults(data, container, 'About Community');
+    } catch (error) { showError(container, error.message); }
+});
+
+// ====================
+// LISTS TAB
+// ====================
+
+document.getElementById('search-lists-btn').addEventListener('click', async () => {
+    const query = document.getElementById('list-search-input').value.trim();
+    const container = document.getElementById('lists-results');
+    if (!query) { showError(container, 'Please enter a search query'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/search-lists', { query });
+        displayLists(data.result?.timeline || data.lists || [], container, `Lists for "${query}"`);
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-list-details-btn').addEventListener('click', async () => {
+    const listId = document.getElementById('list-id-input').value.trim();
+    const container = document.getElementById('lists-results');
+    if (!listId) { showError(container, 'Please enter a list ID'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/list-details', { listId });
+        displayGenericResults(data, container, 'List Details');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-list-timeline-btn').addEventListener('click', async () => {
+    const listId = document.getElementById('list-id-input').value.trim();
+    const container = document.getElementById('lists-results');
+    if (!listId) { showError(container, 'Please enter a list ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/list-timeline', { listId });
+        displayTweets(data.result?.timeline || [], container, 'List Timeline');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-list-members-btn').addEventListener('click', async () => {
+    const listId = document.getElementById('list-id-input').value.trim();
+    const container = document.getElementById('lists-results');
+    if (!listId) { showError(container, 'Please enter a list ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/list-members', { listId, count: 20 });
+        displayUsers(data.result?.timeline || [], container, 'List Members');
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-list-followers-btn').addEventListener('click', async () => {
+    const listId = document.getElementById('list-id-input').value.trim();
+    const container = document.getElementById('lists-results');
+    if (!listId) { showError(container, 'Please enter a list ID first'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/list-followers', { listId, count: 20 });
+        displayUsers(data.result?.timeline || [], container, 'List Followers');
+    } catch (error) { showError(container, error.message); }
+});
+
+// ====================
+// TRENDS TAB
+// ====================
+
+document.getElementById('get-trend-locations-btn').addEventListener('click', async () => {
+    const container = document.getElementById('trends-results');
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/trends-locations', {});
+        const locations = data.result || data;
+        if (Array.isArray(locations)) {
+            container.innerHTML = `<h3>Available Trend Locations</h3>${locations.map(loc => `
+                <div class="list-item"><strong>${loc.name}</strong> - ${loc.country}
+                <span class="badge badge-count">WOEID: ${loc.woeid}</span></div>`).join('')}`;
+        } else { displayGenericResults(data, container, 'Trend Locations'); }
+    } catch (error) { showError(container, error.message); }
+});
+
+document.getElementById('get-trends-btn').addEventListener('click', async () => {
+    const woeid = document.getElementById('trend-woeid-input').value.trim();
+    const container = document.getElementById('trends-results');
+    if (!woeid) { showError(container, 'Please enter a WOEID'); return; }
+    showLoading(container);
+    try {
+        const data = await fetchFromAPI('/trends-by-location', { woeid });
+        const trends = data[0]?.trends || data.trends || [];
+        if (trends.length === 0) { container.innerHTML = '<p>No trends found</p>'; return; }
+        container.innerHTML = `<h3>Trending Topics</h3>${trends.map((trend, i) => `
+            <div class="trend-card"><strong>${i + 1}. ${trend.name}</strong>
+            ${trend.tweet_volume ? `<span class="badge badge-count">${formatNumber(trend.tweet_volume)} tweets</span>` : ''}
+            ${trend.url ? `<br><a href="${trend.url}" target="_blank" style="color: #1da1f2;">View</a>` : ''}</div>`).join('')}`;
+    } catch (error) { showError(container, error.message); }
+});
+
+// ====================
+// DISPLAY FUNCTIONS
+// ====================
+
 function displayTweets(tweets, container, title) {
-    if (!tweets || tweets.length === 0) {
-        container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
-        return;
-    }
-
-    const tweetsHtml = tweets.map(tweet => `
-        <div class="tweet-card">
-            <p><strong>@${tweet.screen_name}:</strong> ${tweet.text}</p>
+    if (!tweets || tweets.length === 0) { container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`; return; }
+    container.innerHTML = `<h3>${title}</h3>${tweets.map(tweet => {
+        const legacy = tweet.legacy || tweet;
+        const user = tweet.user?.legacy || tweet.user || {};
+        return `<div class="tweet-card"><p><strong>@${user.screen_name || 'Unknown'}:</strong> ${legacy.full_text || legacy.text || 'No content'}</p>
             <div class="tweet-footer">
-                <span>❤️ ${tweet.favorites || 0}</span>
-                <span>🔁 ${tweet.retweets || 0}</span>
-                <span>💬 ${tweet.replies || 0}</span>
-                <span>${new Date(tweet.created_at).toLocaleString()}</span>
-            </div>
-        </div>
-    `).join('');
-
-    container.innerHTML = `<h3>${title}</h3>${tweetsHtml}`;
+                <span>❤️ ${formatNumber(legacy.favorite_count || legacy.favorites || 0)}</span>
+                <span>🔁 ${formatNumber(legacy.retweet_count || legacy.retweets || 0)}</span>
+                <span>💬 ${formatNumber(legacy.reply_count || legacy.replies || 0)}</span>
+                <span>📅 ${formatDate(legacy.created_at || tweet.created_at || 'Unknown')}</span>
+            </div></div>`;
+    }).join('')}`;
 }
 
-// --- Tweet Search Feature ---
-searchBtn.addEventListener('click', () => {
-    const query = searchQueryInput.value.trim();
-    if (query) {
-        tweetSearchResultsContainer.innerHTML = '<p>Loading...</p>';
-        searchTweets(query);
-    }
-});
-
-async function searchTweets(query) {
-    searchBtn.disabled = true;
-    keywordSortContainer.style.display = 'none';
-    try {
-        const data = await fetchFromAPI('/search.php', { query });
-        currentKeywordTweets = data.timeline || [];
-        displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
-        if (currentKeywordTweets.length > 0) {
-            keywordSortContainer.style.display = 'flex';
-        }
-    } catch (error) {
-        console.error('Error searching tweets:', error);
-        tweetSearchResultsContainer.innerHTML = `<p class="error">Failed to fetch tweets. Please try again.</p>`;
-    } finally {
-        searchBtn.disabled = false;
-    }
+function displayUsers(users, container, title) {
+    if (!users || users.length === 0) { container.innerHTML = `<h3>${title}</h3><p>No users found.</p>`; return; }
+    container.innerHTML = `<h3>${title}</h3>${users.map(user => {
+        const legacy = user.legacy || user;
+        return `<div class="user-card"><strong>@${legacy.screen_name}</strong> - ${legacy.name}
+            ${legacy.verified ? '<span class="badge badge-verified">✓</span>' : ''}
+            <br><small>${legacy.description || 'No description'}</small>
+            <div class="tweet-footer">
+                <span>👥 ${formatNumber(legacy.followers_count || 0)} followers</span>
+                <span>📝 ${formatNumber(legacy.statuses_count || 0)} tweets</span>
+            </div></div>`;
+    }).join('')}`;
 }
 
-// --- Sorting for Keyword Search ---
-sortByDateBtn.addEventListener('click', () => {
-    currentKeywordTweets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
-});
+function displayLists(lists, container, title) {
+    if (!lists || lists.length === 0) { container.innerHTML = `<h3>${title}</h3><p>No lists found.</p>`; return; }
+    container.innerHTML = `<h3>${title}</h3>${lists.map(list => {
+        const legacy = list.legacy || list;
+        return `<div class="list-card"><strong>${legacy.name}</strong>
+            <br><small>${legacy.description || 'No description'}</small>
+            <div class="tweet-footer">
+                <span>👥 ${formatNumber(legacy.member_count || 0)} members</span>
+                <span>👤 ${formatNumber(legacy.subscriber_count || 0)} subscribers</span>
+            </div></div>`;
+    }).join('')}`;
+}
 
-sortByLikesBtn.addEventListener('click', () => {
-    currentKeywordTweets.sort((a, b) => (b.favorites || 0) - (a.favorites || 0));
-    displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
-});
+function displayCommunities(communities, container, title) {
+    if (!communities || communities.length === 0) { container.innerHTML = `<h3>${title}</h3><p>No communities found.</p>`; return; }
+    container.innerHTML = `<h3>${title}</h3>${communities.map(community => `
+        <div class="community-card"><strong>${community.name || 'Unknown'}</strong>
+        <br><small>${community.description || 'No description'}</small>
+        ${community.member_count ? `<div class="tweet-footer"><span>👥 ${formatNumber(community.member_count)} members</span></div>` : ''}
+        </div>`).join('')}`;
+}
 
-sortByRetweetsBtn.addEventListener('click', () => {
-    currentKeywordTweets.sort((a, b) => (b.retweets || 0) - (a.retweets || 0));
-    displayTweets(currentKeywordTweets, tweetSearchResultsContainer, 'Search Results');
-});
+function displayGenericResults(data, container, title) {
+    container.innerHTML = `<h3>${title}</h3><div class="list-card">
+        <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">${JSON.stringify(data, null, 2)}</pre>
+    </div>`;
+}
 
-// --- User Profile Search Feature ---
-userSearchBtn.addEventListener('click', async () => {
-    const username = userSearchInput.value.trim();
-    const keyword = userKeywordInput.value.trim();
-
-    if (!username) {
-        alert('Please enter a username.');
-        return;
-    }
-
-    userProfileContainer.innerHTML = ''; // Clear profile section
-    userTweetsContainer.innerHTML = '<p>Loading user tweets...</p>';
-    userSortContainer.style.display = 'none';
-    userSearchBtn.disabled = true;
-
-    try {
-        let query = `from:${username}`;
-        if (keyword) {
-            query = `${keyword} ${query}`;
-        }
-
-        const tweetsData = await fetchFromAPI('/search.php', { query });
-
-        let title = `Tweets from @${username}`;
-        if (keyword) {
-            title += ` containing "${keyword}"`;
-        }
-
-        if (tweetsData && tweetsData.timeline && tweetsData.timeline.length > 0) {
-            currentUserTweets = tweetsData.timeline;
-            displayTweets(currentUserTweets, userTweetsContainer, title);
-            userProfileContainer.innerHTML = `<h2>${title}</h2>`;
-            userSortContainer.style.display = 'flex'; // Show sort buttons
-        } else {
-            userTweetsContainer.innerHTML = `<p class="error">No tweets found for this search.</p>`;
-            userProfileContainer.innerHTML = '';
-        }
-    } catch (error) {
-        console.error('Error searching user:', error);
-        userProfileContainer.innerHTML = '';
-        userTweetsContainer.innerHTML = `<p class="error">Error: ${error.message}</p>`;
-    } finally {
-        userSearchBtn.disabled = false;
-    }
-});
-
-// --- Sorting for User Search ---
-userSortByDateBtn.addEventListener('click', () => {
-    currentUserTweets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-    displayTweets(currentUserTweets, userTweetsContainer, `Tweets from @${userSearchInput.value.trim()}`);
-});
-
-userSortByLikesBtn.addEventListener('click', () => {
-    currentUserTweets.sort((a, b) => (b.favorites || 0) - (a.favorites || 0));
-    displayTweets(currentUserTweets, userTweetsContainer, `Tweets from @${userSearchInput.value.trim()}`);
-});
-
-userSortByRetweetsBtn.addEventListener('click', () => {
-    currentUserTweets.sort((a, b) => (b.retweets || 0) - (a.retweets || 0));
-    displayTweets(currentUserTweets, userTweetsContainer, `Tweets from @${userSearchInput.value.trim()}`);
-});

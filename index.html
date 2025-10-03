@@ -3,39 +3,163 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>X Scraper</title>
+    <title>X Scraper - Complete Twitter API Tool</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <h1>Tweet Search</h1>
-        <div class="search-container">
-            <input type="text" id="search-query-input" placeholder="Enter keyword or #hashtag">
-            <button id="search-btn" class="btn-primary">Search</button>
-        </div>
-        <div class="sort-container" id="keyword-sort-container" style="display: none;">
-            <button id="sort-by-date" class="btn-secondary">Sort by Date</button>
-            <button id="sort-by-likes" class="btn-secondary">Sort by Likes</button>
-            <button id="sort-by-retweets" class="btn-secondary">Sort by Retweets</button>
-        </div>
-        <div id="tweet-search-results" class="results-container"></div>
+        <header>
+            <h1>🐦 X Scraper</h1>
+            <p class="subtitle">Comprehensive Twitter Data Explorer</p>
+        </header>
 
-        <hr>
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="search">🔍 Search</button>
+            <button class="tab-btn" data-tab="user">👤 User Info</button>
+            <button class="tab-btn" data-tab="tweet">📝 Tweet Details</button>
+            <button class="tab-btn" data-tab="community">👥 Communities</button>
+            <button class="tab-btn" data-tab="lists">📋 Lists</button>
+            <button class="tab-btn" data-tab="trends">📈 Trends</button>
+        </div>
 
-        <h1>User Profile Search</h1>
-        <div class="search-container">
-            <input type="text" id="user-search-input" placeholder="Username (e.g., elonmusk)">
-            <input type="text" id="user-keyword-input" placeholder="Keyword (optional)">
-            <button id="user-search-btn" class="btn-primary">Search</button>
+        <!-- Search Tab -->
+        <div class="tab-content active" id="search-tab">
+            <h2>Search Twitter</h2>
+            <div class="search-container">
+                <input type="text" id="search-query" placeholder="Enter keyword, #hashtag, or @username">
+                <select id="search-type">
+                    <option value="Top">Top</option>
+                    <option value="Latest">Latest</option>
+                    <option value="People">People</option>
+                    <option value="Photos">Photos</option>
+                    <option value="Videos">Videos</option>
+                </select>
+                <input type="number" id="search-count" placeholder="Count" value="20" min="1" max="100">
+                <button id="search-btn" class="btn-primary">Search</button>
+            </div>
+            <div class="search-container">
+                <input type="text" id="autocomplete-input" placeholder="Autocomplete suggestions...">
+                <button id="autocomplete-btn" class="btn-secondary">Get Suggestions</button>
+            </div>
+            <div id="search-results" class="results-container"></div>
         </div>
-        <div id="user-profile"></div>
-        <div class="sort-container" id="user-sort-container" style="display: none;">
-            <button id="user-sort-by-date" class="btn-secondary">Sort by Date</button>
-            <button id="user-sort-by-likes" class="btn-secondary">Sort by Likes</button>
-            <button id="user-sort-by-retweets" class="btn-secondary">Sort by Retweets</button>
+
+        <!-- User Tab -->
+        <div class="tab-content" id="user-tab">
+            <h2>User Information</h2>
+            <div class="search-container">
+                <input type="text" id="username-input" placeholder="Username (e.g., MrBeast)">
+                <button id="get-user-btn" class="btn-primary">Get Profile</button>
+            </div>
+            <div id="user-profile" class="results-container"></div>
+
+            <h3>User Content</h3>
+            <div class="button-group">
+                <button id="get-user-tweets-btn" class="btn-secondary">Tweets</button>
+                <button id="get-user-replies-btn" class="btn-secondary">Replies</button>
+                <button id="get-user-media-btn" class="btn-secondary">Media</button>
+                <button id="get-user-likes-btn" class="btn-secondary">Likes</button>
+            </div>
+
+            <h3>User Network</h3>
+            <div class="button-group">
+                <button id="get-user-followers-btn" class="btn-secondary">Followers</button>
+                <button id="get-user-following-btn" class="btn-secondary">Following</button>
+                <button id="get-verified-followers-btn" class="btn-secondary">Verified Followers</button>
+            </div>
+            
+            <div class="search-container">
+                <input type="number" id="user-count" placeholder="Count (default: 20)" value="20" min="1" max="100">
+            </div>
+            <div id="user-results" class="results-container"></div>
         </div>
-        <div id="user-tweets" class="results-container"></div>
+
+        <!-- Tweet Tab -->
+        <div class="tab-content" id="tweet-tab">
+            <h2>Tweet Details</h2>
+            <div class="search-container">
+                <input type="text" id="tweet-id-input" placeholder="Tweet ID (e.g., 1631781099415257088)">
+                <button id="get-tweet-btn" class="btn-primary">Get Tweet</button>
+            </div>
+            <div id="tweet-details" class="results-container"></div>
+
+            <h3>Tweet Interactions</h3>
+            <div class="button-group">
+                <button id="get-comments-btn" class="btn-secondary">Comments</button>
+                <button id="get-retweets-btn" class="btn-secondary">Retweets</button>
+                <button id="get-quotes-btn" class="btn-secondary">Quotes</button>
+                <button id="get-likes-btn" class="btn-secondary">Likes</button>
+            </div>
+            <div class="search-container">
+                <input type="number" id="tweet-count" placeholder="Count (default: 40)" value="40" min="1" max="100">
+            </div>
+            <div id="tweet-interactions" class="results-container"></div>
+        </div>
+
+        <!-- Community Tab -->
+        <div class="tab-content" id="community-tab">
+            <h2>Communities</h2>
+            <div class="search-container">
+                <input type="text" id="community-search-input" placeholder="Search communities (e.g., football)">
+                <button id="search-community-btn" class="btn-primary">Search</button>
+            </div>
+            <div class="search-container">
+                <button id="get-community-topics-btn" class="btn-secondary">Get Topics</button>
+                <button id="explore-community-timeline-btn" class="btn-secondary">Explore Timeline</button>
+            </div>
+            
+            <h3>Community Details</h3>
+            <div class="search-container">
+                <input type="text" id="community-id-input" placeholder="Community ID">
+                <button id="get-community-details-btn" class="btn-primary">Get Details</button>
+            </div>
+            <div class="button-group">
+                <button id="get-community-tweets-btn" class="btn-secondary">Tweets</button>
+                <button id="get-community-members-btn" class="btn-secondary">Members</button>
+                <button id="get-community-moderators-btn" class="btn-secondary">Moderators</button>
+                <button id="get-community-about-btn" class="btn-secondary">About</button>
+            </div>
+            <div id="community-results" class="results-container"></div>
+        </div>
+
+        <!-- Lists Tab -->
+        <div class="tab-content" id="lists-tab">
+            <h2>Twitter Lists</h2>
+            <div class="search-container">
+                <input type="text" id="list-search-input" placeholder="Search lists (e.g., football)">
+                <button id="search-lists-btn" class="btn-primary">Search</button>
+            </div>
+            
+            <h3>List Details</h3>
+            <div class="search-container">
+                <input type="text" id="list-id-input" placeholder="List ID (e.g., 78468360)">
+                <button id="get-list-details-btn" class="btn-primary">Get Details</button>
+            </div>
+            <div class="button-group">
+                <button id="get-list-timeline-btn" class="btn-secondary">Timeline</button>
+                <button id="get-list-members-btn" class="btn-secondary">Members</button>
+                <button id="get-list-followers-btn" class="btn-secondary">Followers</button>
+            </div>
+            <div id="lists-results" class="results-container"></div>
+        </div>
+
+        <!-- Trends Tab -->
+        <div class="tab-content" id="trends-tab">
+            <h2>Trending Topics</h2>
+            <div class="search-container">
+                <button id="get-trend-locations-btn" class="btn-primary">Get Available Locations</button>
+            </div>
+            
+            <h3>Trends by Location</h3>
+            <div class="search-container">
+                <input type="text" id="trend-woeid-input" placeholder="WOEID (e.g., 2424766 for Qatar)">
+                <button id="get-trends-btn" class="btn-primary">Get Trends</button>
+            </div>
+            <div id="trends-results" class="results-container"></div>
+        </div>
     </div>
+
     <!-- Optional: Load config.js for local development (file is gitignored) -->
     <script src="config.js" onerror="console.log('No config.js found - using Cloudflare Worker proxy')"></script>
     <script src="script.js"></script>

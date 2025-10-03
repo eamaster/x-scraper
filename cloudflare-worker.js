@@ -13,7 +13,7 @@
  * 6. Update the WORKER_URL in script.js with your worker's URL
  */
 
-const RAPIDAPI_HOST = 'twitter-api45.p.rapidapi.com';
+const RAPIDAPI_HOST = 'twitter241.p.rapidapi.com';
 
 export default {
   async fetch(request, env) {
@@ -54,10 +54,9 @@ export default {
       // Parse the request URL
       const url = new URL(request.url);
       const endpoint = url.searchParams.get('endpoint');
-      const query = url.searchParams.get('query');
 
-      if (!endpoint || !query) {
-        return new Response(JSON.stringify({ error: 'Missing required parameters' }), {
+      if (!endpoint) {
+        return new Response(JSON.stringify({ error: 'Missing endpoint parameter' }), {
           status: 400,
           headers: {
             'Content-Type': 'application/json',
@@ -66,9 +65,15 @@ export default {
         });
       }
 
-      // Build the API URL
+      // Build the API URL with all query parameters except 'endpoint'
       const apiUrl = new URL(`https://${RAPIDAPI_HOST}${endpoint}`);
-      apiUrl.searchParams.set('query', query);
+      
+      // Copy all query parameters except 'endpoint' to the API URL
+      for (const [key, value] of url.searchParams) {
+        if (key !== 'endpoint') {
+          apiUrl.searchParams.set(key, value);
+        }
+      }
 
       // Make the request to RapidAPI
       const apiResponse = await fetch(apiUrl.toString(), {

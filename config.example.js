@@ -13,6 +13,6 @@
 
 window.API_CONFIG = {
     key: 'YOUR_RAPIDAPI_KEY_HERE',
-    host: 'twitter-api45.p.rapidapi.com'
+    host: 'twitter241.p.rapidapi.com'
 };
 
