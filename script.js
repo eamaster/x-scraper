@@ -186,18 +186,46 @@ async function getUserContent(type) {
         if (!userId) throw new Error('Could not get user ID');
         const data = await fetchFromAPI(endpoints[type], { user: userId, count });
         
-        // Extract tweets from nested structure
-        let tweets = [];
-        const instructions = data.result?.timeline?.instructions || [];
-        if (instructions.length > 0) {
-            const entries = instructions[0].entries || [];
-            tweets = entries
-                .filter(entry => entry.content?.itemContent?.tweet_results?.result)
-                .map(entry => entry.content.itemContent.tweet_results.result);
-        }
+        console.log(`🔍 ${type} response structure:`, Object.keys(data), data);
         
+        // Extract tweets - try multiple possible structures
+        let tweets = extractTweetsFromResponse(data);
+        
+        console.log(`✅ Extracted ${tweets.length} tweets for ${type}`);
         displayTweets(tweets, container, `${type.charAt(0).toUpperCase() + type.slice(1)} from @${username}`);
     } catch (error) { showError(container, error.message); }
+}
+
+// Universal tweet extractor that handles multiple API response structures
+function extractTweetsFromResponse(data) {
+    let tweets = [];
+    
+    // Try structure 1: data.result.timeline.instructions[0].entries
+    const instructions = data.result?.timeline?.instructions || [];
+    if (instructions.length > 0) {
+        for (const instruction of instructions) {
+            if (instruction.type === 'TimelineAddEntries' && instruction.entries) {
+                const entries = instruction.entries.filter(entry => 
+                    entry.content?.itemContent?.tweet_results?.result ||
+                    entry.content?.itemContent?.tweetDisplayType === 'Tweet'
+                );
+                tweets.push(...entries.map(entry => entry.content.itemContent.tweet_results.result));
+            }
+        }
+    }
+    
+    // Try structure 2: data.data (for some endpoints)
+    if (tweets.length === 0 && data.data) {
+        const dataArray = Array.isArray(data.data) ? data.data : Object.values(data.data);
+        tweets = dataArray.filter(item => item && (item.text || item.full_text));
+    }
+    
+    // Try structure 3: direct timeline
+    if (tweets.length === 0 && data.timeline) {
+        tweets = Array.isArray(data.timeline) ? data.timeline : [];
+    }
+    
+    return tweets.filter(t => t); // Remove null/undefined
 }
 
 async function getUserNetwork(type) {
@@ -213,18 +241,45 @@ async function getUserNetwork(type) {
         if (!userId) throw new Error('Could not get user ID');
         const data = await fetchFromAPI(endpoints[type], { user: userId, count });
         
-        // Extract users from nested structure
-        let users = [];
-        const instructions = data.result?.timeline?.instructions || [];
-        if (instructions.length > 0) {
-            const entries = instructions[0].entries || [];
-            users = entries
-                .filter(entry => entry.content?.itemContent?.user_results?.result)
-                .map(entry => entry.content.itemContent.user_results.result);
-        }
+        console.log(`🔍 ${type} response structure:`, Object.keys(data), data);
         
+        // Extract users - try multiple possible structures
+        let users = extractUsersFromResponse(data);
+        
+        console.log(`✅ Extracted ${users.length} users for ${type}`);
         displayUsers(users, container, `${type.charAt(0).toUpperCase() + type.slice(1)} of @${username}`);
     } catch (error) { showError(container, error.message); }
+}
+
+// Universal user extractor
+function extractUsersFromResponse(data) {
+    let users = [];
+    
+    // Try structure 1: data.result.timeline.instructions[0].entries
+    const instructions = data.result?.timeline?.instructions || [];
+    if (instructions.length > 0) {
+        for (const instruction of instructions) {
+            if (instruction.type === 'TimelineAddEntries' && instruction.entries) {
+                const entries = instruction.entries.filter(entry => 
+                    entry.content?.itemContent?.user_results?.result
+                );
+                users.push(...entries.map(entry => entry.content.itemContent.user_results.result));
+            }
+        }
+    }
+    
+    // Try structure 2: data.data
+    if (users.length === 0 && data.data) {
+        const dataArray = Array.isArray(data.data) ? data.data : Object.values(data.data);
+        users = dataArray.filter(item => item && item.screen_name);
+    }
+    
+    // Try structure 3: direct timeline
+    if (users.length === 0 && data.timeline) {
+        users = Array.isArray(data.timeline) ? data.timeline : [];
+    }
+    
+    return users.filter(u => u); // Remove null/undefined
 }
 
 document.getElementById('get-user-tweets-btn').addEventListener('click', () => getUserContent('tweets'));
