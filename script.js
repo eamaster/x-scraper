@@ -1,5 +1,10 @@
-const apiKey = '4aaf9685f9msh91bb6936661eb07p1a7da5jsn7ff9f3fe3216';
-const apiHost = 'twitter-api45.p.rapidapi.com';
+// Configuration
+// Cloudflare Worker URL (API key is stored securely in Cloudflare)
+const WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
+
+// For local development with API key, create a config.js file (see config.example.js)
+// and uncomment the line below:
+// const WORKER_URL = null; // This will use direct API calls with config.js
 
 // --- DOM Elements ---
 const searchBtn = document.getElementById('search-btn');
@@ -26,22 +31,42 @@ let currentUserTweets = [];
 
 // --- Generic Fetch Function ---
 async function fetchFromAPI(endpoint, params) {
-    const url = new URL(`https://${apiHost}${endpoint}`);
-    url.search = new URLSearchParams(params).toString();
+    // Check if using Cloudflare Worker proxy
+    if (WORKER_URL && WORKER_URL !== 'YOUR_CLOUDFLARE_WORKER_URL') {
+        // Use Cloudflare Worker as proxy
+        const url = new URL(WORKER_URL);
+        url.searchParams.set('endpoint', endpoint);
+        url.searchParams.set('query', params.query);
 
-    const options = {
-        method: 'GET',
-        headers: {
-            'X-RapidAPI-Key': apiKey,
-            'X-RapidAPI-Host': apiHost
+        const response = await fetch(url.toString(), {
+            method: 'GET',
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
         }
-    };
+        return await response.json();
+    } else if (typeof window.API_CONFIG !== 'undefined') {
+        // Fallback to direct API call for local development (requires config.js)
+        const url = new URL(`https://${window.API_CONFIG.host}${endpoint}`);
+        url.search = new URLSearchParams(params).toString();
 
-    const response = await fetch(url, options);
-    if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
+        const options = {
+            method: 'GET',
+            headers: {
+                'X-RapidAPI-Key': window.API_CONFIG.key,
+                'X-RapidAPI-Host': window.API_CONFIG.host
+            }
+        };
+
+        const response = await fetch(url, options);
+        if (!response.ok) {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+        return await response.json();
+    } else {
+        throw new Error('API configuration not found. Please set up your Cloudflare Worker URL or create config.js for local development.');
     }
-    return await response.json();
 }
 
 // --- Generic Tweet Display Function ---

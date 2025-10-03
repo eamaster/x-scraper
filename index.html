@@ -36,6 +36,8 @@
         </div>
         <div id="user-tweets" class="results-container"></div>
     </div>
+    <!-- Optional: Load config.js for local development (file is gitignored) -->
+    <script src="config.js" onerror="console.log('No config.js found - using Cloudflare Worker proxy')"></script>
     <script src="script.js"></script>
 </body>
 </html>
