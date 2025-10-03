@@ -431,13 +431,29 @@ document.getElementById('get-trend-locations-btn').addEventListener('click', asy
     showLoading(container);
     try {
         const data = await fetchFromAPI('/trends-locations', {});
+        console.log('📍 Locations response:', data);
+        
         const locations = data.result || data;
-        if (Array.isArray(locations)) {
-            container.innerHTML = `<h3>Available Trend Locations</h3>${locations.map(loc => `
-                <div class="list-item"><strong>${loc.name}</strong> - ${loc.country}
-                <span class="badge badge-count">WOEID: ${loc.woeid}</span></div>`).join('')}`;
-        } else { displayGenericResults(data, container, 'Trend Locations'); }
-    } catch (error) { showError(container, error.message); }
+        
+        if (Array.isArray(locations) && locations.length > 0) {
+            container.innerHTML = `
+                <h3>🌍 Available Trend Locations (${locations.length})</h3>
+                <p style="color: #65676b; margin-bottom: 15px;">Click a WOEID to see trends for that location</p>
+                ${locations.slice(0, 50).map(loc => `
+                    <div class="list-item" style="cursor: pointer;" onclick="document.getElementById('trend-woeid-input').value='${loc.woeid}'; document.getElementById('get-trends-btn').click();">
+                        <strong>${loc.name}</strong> ${loc.country ? `- ${loc.country}` : ''}
+                        <span class="badge badge-count">WOEID: ${loc.woeid}</span>
+                    </div>
+                `).join('')}
+                ${locations.length > 50 ? `<p style="margin-top: 10px; color: #65676b;">Showing first 50 of ${locations.length} locations</p>` : ''}
+            `;
+        } else {
+            displayGenericResults(data, container, 'Trend Locations'); 
+        }
+    } catch (error) {
+        console.error('Locations error:', error);
+        showError(container, error.message); 
+    }
 });
 
 document.getElementById('get-trends-btn').addEventListener('click', async () => {
@@ -447,13 +463,28 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
     showLoading(container);
     try {
         const data = await fetchFromAPI('/trends-by-location', { woeid });
-        const trends = data[0]?.trends || data.trends || [];
+        console.log('📈 Trends response:', data);
+        
+        // Extract trends from data.result[0].trends
+        const trends = data.result?.[0]?.trends || data[0]?.trends || data.trends || [];
+        
         if (trends.length === 0) { container.innerHTML = '<p>No trends found</p>'; return; }
-        container.innerHTML = `<h3>Trending Topics</h3>${trends.map((trend, i) => `
-            <div class="trend-card"><strong>${i + 1}. ${trend.name}</strong>
-            ${trend.tweet_volume ? `<span class="badge badge-count">${formatNumber(trend.tweet_volume)} tweets</span>` : ''}
-            ${trend.url ? `<br><a href="${trend.url}" target="_blank" style="color: #1da1f2;">View</a>` : ''}</div>`).join('')}`;
-    } catch (error) { showError(container, error.message); }
+        
+        const location = data.result?.[0]?.locations?.[0]?.name || 'Unknown Location';
+        
+        container.innerHTML = `
+            <h3>🔥 Trending in ${location}</h3>
+            ${trends.map((trend, i) => `
+                <div class="trend-card">
+                    <strong>${i + 1}. ${trend.name}</strong>
+                    ${trend.tweet_volume ? `<span class="badge badge-count">${formatNumber(trend.tweet_volume)} tweets</span>` : '<span class="badge badge-count">Volume N/A</span>'}
+                    ${trend.url ? `<br><a href="${trend.url}" target="_blank" style="color: #1da1f2;">View on Twitter →</a>` : ''}
+                </div>
+            `).join('')}`;
+    } catch (error) { 
+        console.error('Trends error:', error);
+        showError(container, error.message); 
+    }
 });
 
 // ====================
