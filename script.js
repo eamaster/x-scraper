@@ -14,9 +14,17 @@ async function fetchFromAPI(endpoint, params = {}) {
                 url.searchParams.set(key, value);
             }
         });
+        
+        console.log('🔍 Fetching:', endpoint, 'with params:', params);
         const response = await fetch(url.toString(), { method: 'GET' });
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-        return await response.json();
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ API Error:', response.status, errorText);
+            throw new Error(`HTTP error! Status: ${response.status} - ${errorText}`);
+        }
+        const data = await response.json();
+        console.log('✅ API Response:', data);
+        return data;
     } else if (typeof window.API_CONFIG !== 'undefined') {
         const url = new URL(`https://${window.API_CONFIG.host}${endpoint}`);
         Object.entries(params).forEach(([key, value]) => {
@@ -25,14 +33,16 @@ async function fetchFromAPI(endpoint, params = {}) {
             }
         });
         const response = await fetch(url.toString(), {
-            method: 'GET',
-            headers: {
+        method: 'GET',
+        headers: {
                 'X-RapidAPI-Key': window.API_CONFIG.key,
                 'X-RapidAPI-Host': window.API_CONFIG.host
             }
         });
         if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-        return await response.json();
+        const data = await response.json();
+        console.log('✅ API Response:', data);
+        return data;
     } else {
         throw new Error('API configuration not found');
     }
@@ -83,8 +93,21 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     showLoading(container);
     try {
         const data = await fetchFromAPI('/search-v2', { query, type, count });
-        displayTweets(data.result?.timeline || [], container, `Search Results for "${query}"`);
-    } catch (error) { showError(container, error.message); }
+        console.log('🔍 Search response structure:', Object.keys(data));
+        
+        // Try different possible data structures
+        let tweets = data.result?.timeline || data.timeline || data.tweets || [];
+        
+        // If still not an array, check nested structures
+        if (!Array.isArray(tweets) && data.result) {
+            tweets = Object.values(data.result).find(val => Array.isArray(val)) || [];
+        }
+        
+        displayTweets(tweets, container, `Search Results for "${query}"`);
+    } catch (error) { 
+        console.error('Search error:', error);
+        showError(container, error.message); 
+    }
 });
 
 document.getElementById('autocomplete-btn').addEventListener('click', async () => {
@@ -128,8 +151,8 @@ document.getElementById('get-user-btn').addEventListener('click', async () => {
                     <div class="profile-info">
                         <h2>${user.name || 'Unknown'} ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</h2>
                         <p>@${user.screen_name || 'unknown'}</p>
-                    </div>
-                </div>
+            </div>
+        </div>
                 <p>${user.description || 'No description'}</p>
                 <div class="profile-stats">
                     <div class="stat"><span class="stat-value">${formatNumber(user.statuses_count || 0)}</span><span class="stat-label">Tweets</span></div>
@@ -407,7 +430,26 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
 // ====================
 
 function displayTweets(tweets, container, title) {
-    if (!tweets || tweets.length === 0) { container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`; return; }
+    console.log('📝 displayTweets called with:', tweets);
+    
+    // Handle non-array responses
+    if (!tweets) {
+        container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
+        return;
+    }
+
+    // Ensure tweets is an array
+    if (!Array.isArray(tweets)) {
+        console.error('⚠️ tweets is not an array:', typeof tweets, tweets);
+        container.innerHTML = `<h3>${title}</h3><div class="error">⚠️ Unexpected data format. Check console for details.</div>`;
+        return;
+    }
+    
+    if (tweets.length === 0) {
+        container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
+        return;
+    }
+    
     container.innerHTML = `<h3>${title}</h3>${tweets.map(tweet => {
         const legacy = tweet.legacy || tweet;
         const user = tweet.user?.legacy || tweet.user || {};
