@@ -22,13 +22,47 @@ function resolveWorkerURL() {
 // Use the resolver wherever WORKER_URL is needed (keep the rest of logic unchanged)
 const WORKER_URL = resolveWorkerURL();
 
-// Safe deep-get by path "a.b.c[0]". Returns undefined if missing.
-function dget(obj, path) {
-    if (!obj || !path) return undefined;
-    return path
-        .replace(/\[(\d+)\]/g, '.$1')
-        .split('.')
-        .reduce((o, k) => (o && k in o ? o[k] : undefined), obj);
+// ---- helpers ----
+function dget(o, p) { if (!o || !p) return; return p.replace(/\[(\d+)\]/g, '.$1').split('.').reduce((x,k)=> x && k in x ? x[k] : undefined, o); }
+
+// Extract tweets from modern /search-v2 structure: result.timeline.instructions[].entries[].content.itemContent.tweet_results.result
+function extractTweetsFromSearchV2(json) {
+  const out = [];
+  const instructions = dget(json, 'result.timeline.instructions') || [];
+  for (const ins of instructions) {
+    for (const e of (ins.entries || [])) {
+      const ic = e?.content?.itemContent;
+      const tr = dget(ic, 'tweet_results.result') || dget(ic, 'tweet_results');
+      if (tr) out.push(tr);
+    }
+  }
+  return out;
+}
+
+// Legacy fallbacks: globalObjects or arrays
+function extractTweetsLegacy(json) {
+  const go = dget(json, 'globalObjects.tweets');
+  if (go && typeof go === 'object') return Object.values(go);
+  if (Array.isArray(json.tweets)) return json.tweets;
+  for (const v of Object.values(json || {})) {
+    if (Array.isArray(v) && v.length && (v[0]?.legacy || v[0]?.full_text || v[0]?.text)) return v;
+  }
+  return [];
+}
+
+// People tab: user results in instructions or globalObjects.users
+function extractUsersFromSearch(json) {
+  const out = [];
+  const instructions = dget(json, 'result.timeline.instructions') || [];
+  for (const ins of instructions) {
+    for (const e of (ins.entries || [])) {
+      const ur = dget(e, 'content.itemContent.user_results.result');
+      if (ur) out.push(ur);
+    }
+  }
+  const go = dget(json, 'globalObjects.users');
+  if (!out.length && go) return Object.values(go);
+  return out;
 }
 
 // Map any of the Twttr API user payload shapes to our UI fields.
@@ -272,7 +306,31 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     const container = document.getElementById('search-results');
     if (!query) { showError(container, 'Please enter a search query'); return; }
     showLoading(container);
-    await doExplore(query, type, count, container);
+    try {
+      let data = await fetchFromAPI('/search-v2', { query, type, count });
+
+      if (type === 'People') {
+        let users = extractUsersFromSearch(data);
+        if (!users.length) {
+          data = await fetchFromAPI('/search', { query, type, count });
+          users = extractUsersFromSearch(data);
+        }
+        displayUsers(users, container, `People for "${query}"`);
+        return;
+      }
+
+      let tweets = extractTweetsFromSearchV2(data);
+      if (!tweets.length) {
+        data = await fetchFromAPI('/search', { query, type, count });
+        tweets = extractTweetsFromSearchV2(data);
+        if (!tweets.length) tweets = extractTweetsLegacy(data);
+      }
+
+      displayTweets(tweets, container, `Search Results for "${query}"`);
+    } catch (error) {
+      console.error('Search error:', error);
+      showError(container, 'Search failed. Try another query.');
+    }
 });
 
 document.getElementById('autocomplete-btn').addEventListener('click', async () => {
@@ -767,7 +825,10 @@ function displayTweets(tweets, container, title) {
     
     container.innerHTML = `<h3>${title}</h3>${tweets.map(tweet => {
         const legacy = tweet.legacy || tweet;
-        const user = tweet.user?.legacy || tweet.user || {};
+        const user =
+          dget(tweet, 'core.user_results.result.legacy') ||
+          tweet.user?.legacy || tweet.user ||
+          dget(tweet, 'legacy.user') || {};
         return `<div class="tweet-card"><p><strong>@${user.screen_name || 'Unknown'}:</strong> ${legacy.full_text || legacy.text || 'No content'}</p>
             <div class="tweet-footer">
                 <span>❤️ ${formatNumber(legacy.favorite_count || legacy.favorites || 0)}</span>
