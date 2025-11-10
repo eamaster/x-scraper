@@ -59,12 +59,21 @@
     <!-- Optional: Load worker-config.js for production (file is gitignored) -->
     <script src="worker-config.js" onerror="console.log('No worker-config.js found - Worker URL must be set')"></script>
     <script>
-        // Load worker-config.js if it exists (gitignored)
-        // Default production URL (can be overridden by worker-config.js)
-        const DEFAULT_WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
-        const WORKER_URL = typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE 
-          ? window.WORKER_URL_OVERRIDE 
-          : (typeof window !== 'undefined' ? DEFAULT_WORKER_URL : null);
+        function resolveWorkerURL() {
+            if (typeof window.WORKER_URL_OVERRIDE === 'string' &&
+                window.WORKER_URL_OVERRIDE &&
+                window.WORKER_URL_OVERRIDE !== 'https://YOUR_WORKER.subdomain.workers.dev') {
+                console.log('🔧 Using WORKER_URL_OVERRIDE from worker-config.js (test)');
+                return window.WORKER_URL_OVERRIDE;
+            }
+            const host = (window.location && window.location.hostname || '').toLowerCase();
+            if (host === 'hesam.me') {
+                console.log('🌐 Using built-in production Worker URL for hesam.me (test)');
+                return 'https://twitter-api-proxy.smah0085.workers.dev';
+            }
+            throw new Error('API configuration not found for test page.');
+        }
+        const WORKER_URL = resolveWorkerURL();
         const results = document.getElementById('results');
 
         function log(message, type = 'info') {

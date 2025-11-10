@@ -1,10 +1,26 @@
-// Configuration
-// Worker URL is set via worker-config.js (gitignored) or window.WORKER_URL_OVERRIDE
-// Default production URL (can be overridden by worker-config.js)
-const DEFAULT_WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
-const WORKER_URL = typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE 
-  ? window.WORKER_URL_OVERRIDE 
-  : (typeof window !== 'undefined' ? DEFAULT_WORKER_URL : null);
+// === Worker URL resolution ===
+function resolveWorkerURL() {
+  // If a server-side override exists (worker-config.js), use it
+  if (typeof window.WORKER_URL_OVERRIDE === 'string' &&
+      window.WORKER_URL_OVERRIDE &&
+      window.WORKER_URL_OVERRIDE !== 'https://YOUR_WORKER.subdomain.workers.dev') {
+    console.log('🔧 Using WORKER_URL_OVERRIDE from worker-config.js');
+    return window.WORKER_URL_OVERRIDE;
+  }
+
+  // Built-in production fallback for the live site
+  const host = (window.location && window.location.hostname || '').toLowerCase();
+  if (host === 'hesam.me') {
+    console.log('🌐 Using built-in production Worker URL for hesam.me');
+    return 'https://twitter-api-proxy.smah0085.workers.dev';
+  }
+
+  // No config found → keep existing error behavior
+  throw new Error('API configuration not found. Create worker-config.js or set window.WORKER_URL_OVERRIDE.');
+}
+
+// Use the resolver wherever WORKER_URL is needed (keep the rest of logic unchanged)
+const WORKER_URL = resolveWorkerURL();
 
 // ====================
 // UTILITY FUNCTIONS
