@@ -64,9 +64,16 @@ export default {
       const url = new URL(request.url);
       const endpoint = url.searchParams.get('endpoint');
 
+      // If no endpoint provided, return helpful information
       if (!endpoint) {
-        return new Response(JSON.stringify({ error: 'Missing endpoint parameter' }), {
-          status: 400,
+        return new Response(JSON.stringify({ 
+          message: 'Twitter API Proxy Worker',
+          status: 'active',
+          usage: 'This Worker requires an endpoint parameter. Use: ?endpoint=/user&username=elonmusk',
+          example: `${url.origin}/?endpoint=/user&username=elonmusk`,
+          note: 'This Worker is designed to be called from a frontend application, not accessed directly.'
+        }), {
+          status: 200,
           headers: cors
         });
       }
