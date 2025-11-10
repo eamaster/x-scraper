@@ -15,8 +15,13 @@ const WORKER_URL = (typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE)
 // ====================
 
 async function fetchFromAPI(endpoint, params = {}) {
-    if (WORKER_URL && WORKER_URL !== 'YOUR_CLOUDFLARE_WORKER_URL') {
-        const url = new URL(WORKER_URL);
+    // Check if we have a valid Worker URL
+    const effectiveWorkerUrl = (typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE) 
+        ? window.WORKER_URL_OVERRIDE 
+        : WORKER_URL;
+    
+    if (effectiveWorkerUrl && effectiveWorkerUrl !== 'YOUR_CLOUDFLARE_WORKER_URL') {
+        const url = new URL(effectiveWorkerUrl);
         url.searchParams.set('endpoint', endpoint);
         Object.entries(params).forEach(([key, value]) => {
             if (value !== null && value !== undefined && value !== '') {
@@ -34,7 +39,7 @@ async function fetchFromAPI(endpoint, params = {}) {
         const data = await response.json();
         console.log('✅ API Response:', data);
         return data;
-    } else if (typeof window.API_CONFIG !== 'undefined') {
+    } else if (typeof window !== 'undefined' && typeof window.API_CONFIG !== 'undefined') {
         const url = new URL(`https://${window.API_CONFIG.host}${endpoint}`);
         Object.entries(params).forEach(([key, value]) => {
             if (value !== null && value !== undefined && value !== '') {
@@ -42,8 +47,8 @@ async function fetchFromAPI(endpoint, params = {}) {
             }
         });
         const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
+            method: 'GET',
+            headers: {
                 'X-RapidAPI-Key': window.API_CONFIG.key,
                 'X-RapidAPI-Host': window.API_CONFIG.host
             }
@@ -53,7 +58,10 @@ async function fetchFromAPI(endpoint, params = {}) {
         console.log('✅ API Response:', data);
         return data;
     } else {
-        throw new Error('API configuration not found');
+        const errorMsg = 'API configuration not found. Please create worker-config.js with your Worker URL or set window.WORKER_URL_OVERRIDE.';
+        console.error('❌', errorMsg);
+        console.error('💡 Run: bash deploy.sh https://your-worker.workers.dev');
+        throw new Error(errorMsg);
     }
 }
 
