@@ -1,5 +1,8 @@
 // Configuration
-const WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
+// ⚠️ SECURITY: Replace with your own Worker URL after deployment.
+// NEVER commit a real Worker URL to the repository.
+// Forks must deploy their own Worker and set this URL locally.
+const WORKER_URL = 'YOUR_CLOUDFLARE_WORKER_URL';
 
 // ====================
 // UTILITY FUNCTIONS

@@ -57,7 +57,9 @@
     </div>
 
     <script>
-        const WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
+        // ⚠️ SECURITY: Replace with your own Worker URL for testing
+        // NEVER commit a real Worker URL to the repository
+        const WORKER_URL = 'YOUR_CLOUDFLARE_WORKER_URL';
         const results = document.getElementById('results');
 
         function log(message, type = 'info') {
