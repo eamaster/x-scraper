@@ -1,5 +1,6 @@
 # API Configuration (contains sensitive keys)
 config.js
+worker-config.js
 *.local.js
 
 # Environment files

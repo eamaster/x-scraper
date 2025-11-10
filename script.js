@@ -2,7 +2,13 @@
 // ⚠️ SECURITY: Replace with your own Worker URL after deployment.
 // NEVER commit a real Worker URL to the repository.
 // Forks must deploy their own Worker and set this URL locally.
-const WORKER_URL = 'YOUR_CLOUDFLARE_WORKER_URL';
+// 
+// Priority order:
+// 1. window.WORKER_URL_OVERRIDE (from worker-config.js - gitignored)
+// 2. YOUR_CLOUDFLARE_WORKER_URL placeholder (must be replaced)
+const WORKER_URL = (typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE) 
+    ? window.WORKER_URL_OVERRIDE 
+    : 'YOUR_CLOUDFLARE_WORKER_URL';
 
 // ====================
 // UTILITY FUNCTIONS
