@@ -15,27 +15,36 @@
 
 const RAPIDAPI_HOST = 'twitter241.p.rapidapi.com';
 
+function buildCors(origin) {
+  const allowed = ['https://hesam.me']; // production origin only
+  const allow = allowed.includes(origin) ? origin : '';
+  return {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': allow || 'null',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400'
+  };
+}
+
 export default {
   async fetch(request, env) {
     // Get the API key from environment variables
     const apiKey = env.RAPIDAPI_KEY;
     
+    const origin = request.headers.get('Origin') || '';
+    
     if (!apiKey) {
       return new Response(JSON.stringify({ error: 'API key not configured' }), {
         status: 500,
-        headers: { 'Content-Type': 'application/json' }
+        headers: buildCors(origin)
       });
     }
 
     // Handle CORS preflight requests
     if (request.method === 'OPTIONS') {
       return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-          'Access-Control-Max-Age': '86400',
-        }
+        headers: buildCors(origin)
       });
     }
 
@@ -43,10 +52,7 @@ export default {
     if (request.method !== 'GET') {
       return new Response(JSON.stringify({ error: 'Method not allowed' }), {
         status: 405,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: buildCors(origin)
       });
     }
 
@@ -58,10 +64,7 @@ export default {
       if (!endpoint) {
         return new Response(JSON.stringify({ error: 'Missing endpoint parameter' }), {
           status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          }
+          headers: buildCors(origin)
         });
       }
 
@@ -88,22 +91,17 @@ export default {
       const data = await apiResponse.json();
 
       // Return the response with CORS headers
+      const corsHeaders = buildCors(origin);
+      corsHeaders['Cache-Control'] = 'public, max-age=300'; // Cache for 5 minutes
       return new Response(JSON.stringify(data), {
         status: apiResponse.status,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          'Cache-Control': 'public, max-age=300' // Cache for 5 minutes
-        }
+        headers: corsHeaders
       });
 
     } catch (error) {
       return new Response(JSON.stringify({ error: error.message }), {
         status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: buildCors(origin)
       });
     }
   }

@@ -1,5 +1,8 @@
 // Configuration
-const WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
+// Worker URL is set via worker-config.js (gitignored) or window.WORKER_URL_OVERRIDE
+const WORKER_URL = typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE 
+  ? window.WORKER_URL_OVERRIDE 
+  : null;
 
 // ====================
 // UTILITY FUNCTIONS

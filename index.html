@@ -170,6 +170,8 @@
 
     <!-- Optional: Load config.js for local development (file is gitignored) -->
     <script src="config.js" onerror="console.log('No config.js found - using Cloudflare Worker proxy')"></script>
+    <!-- Optional: Load worker-config.js for production (file is gitignored) -->
+    <script src="worker-config.js" onerror="console.log('No worker-config.js found - Worker URL must be set')"></script>
     <script src="script.js"></script>
 </body>
 </html>

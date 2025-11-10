@@ -56,8 +56,13 @@
         <div id="results"></div>
     </div>
 
+    <!-- Optional: Load worker-config.js for production (file is gitignored) -->
+    <script src="worker-config.js" onerror="console.log('No worker-config.js found - Worker URL must be set')"></script>
     <script>
-        const WORKER_URL = 'https://twitter-api-proxy.smah0085.workers.dev';
+        // Load worker-config.js if it exists (gitignored)
+        const WORKER_URL = typeof window !== 'undefined' && window.WORKER_URL_OVERRIDE 
+          ? window.WORKER_URL_OVERRIDE 
+          : null;
         const results = document.getElementById('results');
 
         function log(message, type = 'info') {

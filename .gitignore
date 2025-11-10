@@ -1,9 +1,10 @@
 # API Configuration (contains sensitive keys)
 config.js
+worker-config.js
 
 # Environment files
 .env
-.env.local
+.env.*
 
 # IDE
 .vscode/
