@@ -45,7 +45,8 @@ function extractTweetsFromSearchV2(json) {
     for (const e of (ins.entries || [])) {
       const ic = e?.content?.itemContent;
       const tr = dget(ic, 'tweet_results.result') || dget(ic, 'tweet_results');
-      if (tr) out.push(tr);
+      const node = tr?.result || tr; // ← always unwrap wrapper
+      if (node) out.push(node);
     }
   }
   return out;
@@ -375,7 +376,12 @@ function extractTweetsFromResponse(data) {
                     entry.content?.itemContent?.tweetDisplayType === 'Tweet'
                 );
                 console.log(`  - Found ${entries.length} tweet entries`);
-                tweets.push(...entries.map(entry => entry.content.itemContent.tweet_results.result));
+                tweets.push(
+                    ...entries
+                        .map(entry => entry.content?.itemContent?.tweet_results?.result || entry.content?.itemContent?.tweet_results)
+                        .filter(Boolean)
+                        .map(t => t.result || t)
+                );
             }
         }
     }
@@ -783,41 +789,47 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
 // DISPLAY FUNCTIONS
 // ====================
 
+function normalizeTweetAndAuthor(t) {
+    const node = t?.result || t;
+    const legacy = node.legacy || node;
+    const author =
+        dget(node, 'core.user_results.result.legacy') ||
+        node.user?.legacy || node.user ||
+        dget(node, 'legacy.user') || {};
+    return { legacy, author };
+}
+
 function displayTweets(tweets, container, title) {
     console.log('📝 displayTweets called with:', tweets);
-    
-    // Handle non-array responses
+
     if (!tweets) {
         container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
         return;
     }
-
-    // Ensure tweets is an array
     if (!Array.isArray(tweets)) {
         console.error('⚠️ tweets is not an array:', typeof tweets, tweets);
         container.innerHTML = `<h3>${title}</h3><div class="error">⚠️ Unexpected data format. Check console for details.</div>`;
         return;
     }
-    
     if (tweets.length === 0) {
         container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
         return;
     }
-    
-    container.innerHTML = `<h3>${title}</h3>${tweets.map(tweet => {
-        const legacy = tweet.legacy || tweet;
-        const user =
-          dget(tweet, 'core.user_results.result.legacy') ||
-          tweet.user?.legacy || tweet.user ||
-          dget(tweet, 'legacy.user') || {};
-        return `<div class="tweet-card"><p><strong>@${user.screen_name || 'Unknown'}:</strong> ${legacy.full_text || legacy.text || 'No content'}</p>
-            <div class="tweet-footer">
-                <span>❤️ ${formatNumber(legacy.favorite_count || legacy.favorites || 0)}</span>
-                <span>🔁 ${formatNumber(legacy.retweet_count || legacy.retweets || 0)}</span>
-                <span>💬 ${formatNumber(legacy.reply_count || legacy.replies || 0)}</span>
-                <span>📅 ${formatDate(legacy.created_at || tweet.created_at || 'Unknown')}</span>
-            </div></div>`;
-    }).join('')}`;
+
+    container.innerHTML = `<h3>${title}</h3>${
+        tweets.map(t => {
+            const { legacy, author } = normalizeTweetAndAuthor(t);
+            return `<div class="tweet-card">
+        <p><strong>@${author.screen_name || 'Unknown'}:</strong> ${legacy.full_text || legacy.text || 'No content'}</p>
+        <div class="tweet-footer">
+          <span>❤️ ${formatNumber(legacy.favorite_count || legacy.favorites || 0)}</span>
+          <span>🔁 ${formatNumber(legacy.retweet_count || legacy.retweets || 0)}</span>
+          <span>💬 ${formatNumber(legacy.reply_count || legacy.replies || 0)}</span>
+          <span>📅 ${formatDate(legacy.created_at || t.created_at || 'Unknown')}</span>
+        </div>
+      </div>`;
+        }).join('')
+    }`;
 }
 
 function displayUsers(users, container, title) {
