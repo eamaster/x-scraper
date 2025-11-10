@@ -76,6 +76,107 @@
         const WORKER_URL = resolveWorkerURL();
         const results = document.getElementById('results');
 
+        function dget(obj, path) {
+            if (!obj || !path) return undefined;
+            return path
+                .replace(/\[(\d+)\]/g, '.$1')
+                .split('.')
+                .reduce((o, k) => (o && k in o ? o[k] : undefined), obj);
+        }
+
+        function normalizeUser(json) {
+            const candidates = [
+                json,
+                dget(json, 'result'),
+                dget(json, 'user'),
+                dget(json, 'data.user'),
+                dget(json, 'data.user.result'),
+                dget(json, 'core.user_results.result'),
+            ].filter(Boolean);
+
+            let u = null;
+            for (const c of candidates) {
+                if (dget(c, 'legacy')) {
+                    u = c.legacy;
+                    break;
+                }
+                if (dget(c, 'user.legacy')) {
+                    u = c.user.legacy;
+                    break;
+                }
+            }
+
+            if (!u && dget(json, 'globalObjects.users')) {
+                const users = dget(json, 'globalObjects.users');
+                const first = Object.values(users)[0];
+                if (first) u = first;
+            }
+
+            const name = dget(u, 'name') || dget(json, 'user.name') || '';
+            const username = dget(u, 'screen_name') || dget(json, 'user.screen_name') || '';
+
+            const description = dget(u, 'description') || '';
+            const avatar =
+                dget(u, 'profile_image_url_https') ||
+                dget(u, 'profile_image_url') ||
+                '';
+            const verified = !!(dget(u, 'verified') || dget(u, 'is_blue_verified'));
+
+            const tweets = dget(u, 'statuses_count');
+            const followers = dget(u, 'followers_count');
+            const following = dget(u, 'friends_count');
+            const favourites = dget(u, 'favourites_count') ?? dget(u, 'favouritesCount');
+
+            return {
+                name,
+                username,
+                description,
+                avatar,
+                verified,
+                metrics: { tweets, followers, following, favourites }
+            };
+        }
+
+        function extractTweetsFromSearch(json) {
+            let entries = dget(json, 'data.instructions') || dget(json, 'data.entry') || dget(json, 'data.entries');
+            if (entries) {
+                const results = [];
+                const visit = (node) => {
+                    if (!node) return;
+                    if (Array.isArray(node)) {
+                        node.forEach(visit);
+                        return;
+                    }
+                    if (typeof node === 'object') {
+                        if (node.tweet_result) {
+                            const legacy = dget(node, 'tweet_result.result.legacy') || dget(node, 'tweet_result.legacy');
+                            if (legacy && (legacy.full_text || legacy.text)) {
+                                const user = dget(node, 'tweet_result.result.core.user_results.result');
+                                results.push(user ? { legacy, user } : { legacy });
+                            }
+                        }
+                        Object.values(node).forEach(visit);
+                    }
+                };
+                visit(entries);
+                if (results.length) return results;
+            }
+
+            if (dget(json, 'globalObjects.tweets')) {
+                return Object.values(json.globalObjects.tweets).map(t => ({ legacy: t }));
+            }
+
+            if (Array.isArray(json.tweets)) return json.tweets.map(t => (t.legacy ? t : { legacy: t }));
+
+            throw new Error('UNEXPECTED_SEARCH_PAYLOAD');
+        }
+
+        function extractCommunityTopics(json) {
+            const topics = dget(json, 'data.fetch_user_community_topics.community_topics');
+            if (Array.isArray(topics)) return topics;
+            throw new Error('UNEXPECTED_COMMUNITY_TOPICS');
+        }
+
         function log(message, type = 'info') {
             const div = document.createElement('div');
             div.className = type;
@@ -89,7 +190,7 @@
 
         async function testAPI(endpoint, params, label) {
             log(`Testing: ${label}`, 'info');
-            
+            let data = null;
             try {
                 const url = new URL(WORKER_URL);
                 url.searchParams.set('endpoint', endpoint);
@@ -102,7 +203,7 @@
                 const response = await fetch(url.toString());
                 log(`Status: ${response.status} ${response.statusText}`, response.ok ? 'success' : 'error');
 
-                const data = await response.json();
+                data = await response.json();
                 
                 log(`Response Keys: ${Object.keys(data).join(', ')}`, 'info');
                 
@@ -120,6 +221,7 @@
             }
             
             log('---', 'info');
+            return data;
         }
 
         function findArrays(obj, path) {
@@ -136,11 +238,38 @@
         }
 
         async function testUser() {
-            await testAPI('/user', { username: 'elonmusk' }, 'Get User Profile');
+            const data = await testAPI('/user', { username: 'elonmusk' }, 'Get User Profile');
+            if (data) {
+                try {
+                    const user = normalizeUser(data);
+                    log(`Normalized user: ${user.name} (@${user.username})`, 'success');
+                } catch (err) {
+                    log(`normalizeUser error: ${err.message}`, 'error');
+                }
+            }
         }
 
         async function testSearch() {
-            await testAPI('/search-v2', { query: 'AI', type: 'Top', count: '5' }, 'Search Tweets');
+            let data = await testAPI('/search-v2', { query: 'AI', type: 'Top', count: '5' }, 'Search Tweets');
+            if (data) {
+                try {
+                    const tweets = extractTweetsFromSearch(data);
+                    log(`Extracted ${tweets.length} tweets from search-v2`, 'success');
+                    return;
+                } catch (err) {
+                    log(`search-v2 parse failed: ${err.message}`, 'error');
+                }
+            }
+
+            data = await testAPI('/search', { query: 'AI', type: 'Top', count: '5' }, 'Search Tweets (fallback)');
+            if (data) {
+                try {
+                    const tweets = extractTweetsFromSearch(data);
+                    log(`Extracted ${tweets.length} tweets from search fallback`, 'success');
+                } catch (err) {
+                    log(`search fallback parse failed: ${err.message}`, 'error');
+                }
+            }
         }
 
         async function testTrends() {

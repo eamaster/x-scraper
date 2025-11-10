@@ -22,6 +22,109 @@ function resolveWorkerURL() {
 // Use the resolver wherever WORKER_URL is needed (keep the rest of logic unchanged)
 const WORKER_URL = resolveWorkerURL();
 
+// Safe deep-get by path "a.b.c[0]". Returns undefined if missing.
+function dget(obj, path) {
+    if (!obj || !path) return undefined;
+    return path
+        .replace(/\[(\d+)\]/g, '.$1')
+        .split('.')
+        .reduce((o, k) => (o && k in o ? o[k] : undefined), obj);
+}
+
+// Map any of the Twttr API user payload shapes to our UI fields.
+// Fixes "Unknown/@unknown" when fields move (legacy, result, data.*)
+function normalizeUser(json) {
+    const candidates = [
+        json,
+        dget(json, 'result'),
+        dget(json, 'user'),
+        dget(json, 'data.user'),
+        dget(json, 'data.user.result'),
+        dget(json, 'core.user_results.result'),
+    ].filter(Boolean);
+
+    let u = null;
+    for (const c of candidates) {
+        if (dget(c, 'legacy')) {
+            u = c.legacy;
+            break;
+        }
+        if (dget(c, 'user.legacy')) {
+            u = c.user.legacy;
+            break;
+        }
+    }
+
+    if (!u && dget(json, 'globalObjects.users')) {
+        const users = dget(json, 'globalObjects.users');
+        const first = Object.values(users)[0];
+        if (first) u = first;
+    }
+
+    const name = dget(u, 'name') || dget(json, 'user.name') || '';
+    const username = dget(u, 'screen_name') || dget(json, 'user.screen_name') || '';
+    const description = dget(u, 'description') || '';
+    const avatar =
+        dget(u, 'profile_image_url_https') ||
+        dget(u, 'profile_image_url') ||
+        '';
+    const verified = !!(dget(u, 'verified') || dget(u, 'is_blue_verified'));
+
+    const tweets = dget(u, 'statuses_count');
+    const followers = dget(u, 'followers_count');
+    const following = dget(u, 'friends_count');
+    const favourites = dget(u, 'favourites_count') ?? dget(u, 'favouritesCount');
+
+    return {
+        name,
+        username,
+        description,
+        avatar,
+        verified,
+        metrics: { tweets, followers, following, favourites }
+    };
+}
+
+function extractTweetsFromSearch(json) {
+    let entries = dget(json, 'data.instructions') || dget(json, 'data.entry') || dget(json, 'data.entries');
+    if (entries) {
+        const results = [];
+        const visit = (node) => {
+            if (!node) return;
+            if (Array.isArray(node)) {
+                node.forEach(visit);
+                return;
+            }
+            if (typeof node === 'object') {
+                if (node.tweet_result) {
+                    const legacy = dget(node, 'tweet_result.result.legacy') || dget(node, 'tweet_result.legacy');
+                    if (legacy && (legacy.full_text || legacy.text)) {
+                        const user = dget(node, 'tweet_result.result.core.user_results.result');
+                        results.push(user ? { legacy, user } : { legacy });
+                    }
+                }
+                Object.values(node).forEach(visit);
+            }
+        };
+        visit(entries);
+        if (results.length) return results;
+    }
+
+    if (dget(json, 'globalObjects.tweets')) {
+        return Object.values(json.globalObjects.tweets).map(t => ({ legacy: t }));
+    }
+
+    if (Array.isArray(json.tweets)) return json.tweets.map(t => (t.legacy ? t : { legacy: t }));
+
+    throw new Error('UNEXPECTED_SEARCH_PAYLOAD');
+}
+
+function extractCommunityTopics(json) {
+    const topics = dget(json, 'data.fetch_user_community_topics.community_topics');
+    if (Array.isArray(topics)) return topics;
+    throw new Error('UNEXPECTED_COMMUNITY_TOPICS');
+}
+
 // ====================
 // UTILITY FUNCTIONS
 // ====================
@@ -77,6 +180,63 @@ function showError(container, message) {
     container.innerHTML = `<div class="error">❌ Error: ${message}</div>`;
 }
 
+function showWarning(container, message) {
+    showError(container, message);
+}
+
+function renderUserCard(user, container) {
+    if (!user || !user.username) {
+        showError(container, 'User not found');
+        return;
+    }
+
+    const avatar = user.avatar
+        ? user.avatar.replace('_normal', '_400x400')
+        : 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+    const metrics = user.metrics || {};
+
+    container.innerHTML = `
+        <div class="profile-card">
+            <div class="profile-header">
+                <img src="${avatar}" alt="${user.name || 'User'}" width="80" height="80" onerror="this.src='https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'">
+                <div class="profile-info">
+                    <h2>${user.name || 'Unknown'} ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</h2>
+                    <p>@${user.username || 'unknown'}</p>
+                </div>
+            </div>
+            <p>${user.description || 'No description'}</p>
+            <div class="profile-stats">
+                <div class="stat"><span class="stat-value">${formatNumber(metrics.tweets || 0)}</span><span class="stat-label">Tweets</span></div>
+                <div class="stat"><span class="stat-value">${formatNumber(metrics.followers || 0)}</span><span class="stat-label">Followers</span></div>
+                <div class="stat"><span class="stat-value">${formatNumber(metrics.following || 0)}</span><span class="stat-label">Following</span></div>
+                <div class="stat"><span class="stat-value">${formatNumber(metrics.favourites || 0)}</span><span class="stat-label">Likes</span></div>
+            </div>
+        </div>`;
+}
+
+function renderSearchResults(tweets, container, query) {
+    displayTweets(tweets, container, `Search Results for "${query}"`);
+}
+
+function renderCommunityTopics(topics, container) {
+    if (!topics || topics.length === 0) {
+        container.innerHTML = '<h3>Community Topics</h3><p>No topics found.</p>';
+        return;
+    }
+
+    container.innerHTML = `<h3>Community Topics</h3>${
+        topics.map(topic => {
+            const subtopics = Array.isArray(topic.subtopics) && topic.subtopics.length
+                ? `<div class="tweet-footer">${topic.subtopics.map(sub => `<span>${sub.topic_name || sub.name}</span>`).join('')}</div>`
+                : '';
+            return `<div class="community-card">
+                <strong>${topic.topic_name || topic.name || 'Topic'}</strong>
+                ${subtopics}
+            </div>`;
+        }).join('')
+    }`;
+}
+
 function formatNumber(num) {
     if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
     if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
@@ -112,32 +272,7 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     const container = document.getElementById('search-results');
     if (!query) { showError(container, 'Please enter a search query'); return; }
     showLoading(container);
-    try {
-        const data = await fetchFromAPI('/search-v2', { query, type, count });
-        console.log('🔍 Raw API response:', data);
-        
-        // Extract tweets from complex nested structure
-        let tweets = [];
-        
-        // Navigate: data.result.timeline.instructions[0].entries
-        const instructions = data.result?.timeline?.instructions || [];
-        if (instructions.length > 0) {
-            const entries = instructions[0].entries || [];
-            console.log(`Found ${entries.length} entries`);
-            
-            // Extract tweets from entries
-            tweets = entries
-                .filter(entry => entry.content?.itemContent?.tweet_results?.result)
-                .map(entry => entry.content.itemContent.tweet_results.result);
-            
-            console.log(`Extracted ${tweets.length} tweets`);
-        }
-        
-        displayTweets(tweets, container, `Search Results for "${query}"`);
-    } catch (error) { 
-        console.error('Search error:', error);
-        showError(container, error.message); 
-    }
+    await doExplore(query, type, count, container);
 });
 
 document.getElementById('autocomplete-btn').addEventListener('click', async () => {
@@ -169,28 +304,8 @@ document.getElementById('get-user-btn').addEventListener('click', async () => {
     showLoading(container);
     try {
         const data = await fetchFromAPI('/user', { username });
-        const user = data.result?.data?.user?.result?.legacy || data.result;
-        if (!user) { showError(container, 'User not found'); return; }
-        const profileImageUrl = user.profile_image_url_https || user.profile_image_url || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
-        const profileImageBigger = profileImageUrl.replace('_normal', '_400x400');
-        
-        container.innerHTML = `
-            <div class="profile-card">
-                <div class="profile-header">
-                    <img src="${profileImageBigger}" alt="${user.name || 'User'}" width="80" height="80" onerror="this.src='https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'">
-                    <div class="profile-info">
-                        <h2>${user.name || 'Unknown'} ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</h2>
-                        <p>@${user.screen_name || 'unknown'}</p>
-            </div>
-        </div>
-                <p>${user.description || 'No description'}</p>
-                <div class="profile-stats">
-                    <div class="stat"><span class="stat-value">${formatNumber(user.statuses_count || 0)}</span><span class="stat-label">Tweets</span></div>
-                    <div class="stat"><span class="stat-value">${formatNumber(user.followers_count || 0)}</span><span class="stat-label">Followers</span></div>
-                    <div class="stat"><span class="stat-value">${formatNumber(user.friends_count || 0)}</span><span class="stat-label">Following</span></div>
-                    <div class="stat"><span class="stat-value">${formatNumber(user.favourites_count || 0)}</span><span class="stat-label">Likes</span></div>
-                </div>
-            </div>`;
+        const normalized = normalizeUser(data);
+        renderUserCard(normalized, container);
     } catch (error) { showError(container, error.message); }
 });
 
@@ -402,10 +517,7 @@ document.getElementById('search-community-btn').addEventListener('click', async 
 document.getElementById('get-community-topics-btn').addEventListener('click', async () => {
     const container = document.getElementById('community-results');
     showLoading(container);
-    try {
-        const data = await fetchFromAPI('/community-topics', {});
-        displayGenericResults(data, container, 'Community Topics');
-    } catch (error) { showError(container, error.message); }
+    await doGetTopics(container);
 });
 
 document.getElementById('explore-community-timeline-btn').addEventListener('click', async () => {
@@ -471,6 +583,38 @@ document.getElementById('get-community-about-btn').addEventListener('click', asy
         displayGenericResults(data, container, 'About Community');
     } catch (error) { showError(container, error.message); }
 });
+
+async function doExplore(query, type = 'Top', count = 20, container) {
+    try {
+        let data = await fetchFromAPI('/search-v2', { query, type, count });
+        let items;
+        try {
+            items = extractTweetsFromSearch(data);
+        } catch (parseErr) {
+            data = await fetchFromAPI('/search', { query, type, count });
+            items = extractTweetsFromSearch(data);
+        }
+        if (!items || items.length === 0) {
+            showWarning(container, 'No results found for this query.');
+            return;
+        }
+        renderSearchResults(items, container, query);
+    } catch (err) {
+        console.error('Explore error:', err);
+        showWarning(container, 'Search failed. Try another query or reduce count.');
+    }
+}
+
+async function doGetTopics(container) {
+    try {
+        const data = await fetchFromAPI('/community-topics', {});
+        const topics = extractCommunityTopics(data);
+        renderCommunityTopics(topics, container);
+    } catch (err) {
+        console.error('Community topics error:', err);
+        showError(container, err.message || 'Failed to load topics');
+    }
+}
 
 // ====================
 // LISTS TAB
