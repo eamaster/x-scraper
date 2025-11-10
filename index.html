@@ -168,6 +168,8 @@
         </div>
     </div>
 
+    <!-- Load worker-config.js for production (file is gitignored) -->
+    <script src="worker-config.js" onerror="console.log('No worker-config.js found - using placeholder')"></script>
     <!-- Optional: Load config.js for local development (file is gitignored) -->
     <script src="config.js" onerror="console.log('No config.js found - using Cloudflare Worker proxy')"></script>
     <script src="script.js"></script>

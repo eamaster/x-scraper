@@ -42,11 +42,33 @@ A comprehensive web application for exploring Twitter data with 50+ endpoints. S
 
 ## 🔒 Security Features
 
-- ✅ **API Key Protection**: Keys stored securely in Cloudflare Workers
+- ✅ **API Key Protection**: Keys stored securely in Cloudflare Workers environment variables
 - ✅ **Zero Exposure**: Frontend never exposes sensitive credentials
-- ✅ **CORS Configured**: Proper security headers in place
+- ✅ **CORS Origin Allowlist**: Only allowed origins can access the Worker (configurable)
 - ✅ **Git Ignore**: Sensitive files excluded from version control
 - ✅ **Environment Variables**: Secure key management
+- ✅ **Pre-commit Hooks**: Automatic secret detection before commits
+- ✅ **Secret Scanning**: Gitleaks configuration for ongoing monitoring
+
+## ⚠️ Security Warnings
+
+### **NEVER Commit Real Worker URLs**
+- ⚠️ **CRITICAL**: The repository contains placeholder `YOUR_CLOUDFLARE_WORKER_URL` in `script.js`
+- ⚠️ **DO NOT** commit your actual Worker URL to the repository
+- ⚠️ **Forks must** deploy their own Worker and set `WORKER_URL` locally
+- ⚠️ If you fork this repository, you **must** create your own Cloudflare Worker
+
+### **API Key Security**
+- ✅ API keys are stored in Cloudflare Worker **Secrets** (environment variables)
+- ✅ Never commit API keys to Git (use `config.example.js` as template for local dev)
+- ✅ The `config.js` file is in `.gitignore` and should never be committed
+- ✅ Rotate credentials if they were ever exposed (see `ROTATE.md`)
+
+### **CORS Configuration**
+- ✅ Worker uses origin allowlist (not wildcard `*`)
+- ✅ Set `ALLOWED_ORIGINS` environment variable in Cloudflare Worker
+- ✅ Only your domain(s) can access the Worker
+- ✅ See `CLOUDFLARE_SETUP.md` for configuration steps
 
 ## 🚀 Setup Instructions
 

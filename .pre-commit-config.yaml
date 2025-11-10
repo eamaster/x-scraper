@@ -1,0 +1,22 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+        args: ['--verbose', '--no-banner']
+        stages: [commit, push]
+
+  - repo: local
+    hooks:
+      - id: check-worker-url
+        name: Check for hardcoded Worker URLs
+        entry: bash -c 'if grep -r "https://.*\.workers\.dev" --include="*.js" --include="*.html" . | grep -v "YOUR_CLOUDFLARE_WORKER_URL" | grep -v "your-worker.your-subdomain"; then echo "ERROR: Hardcoded Worker URL found! Use YOUR_CLOUDFLARE_WORKER_URL placeholder instead."; exit 1; fi'
+        language: system
+        stages: [commit]
+
+      - id: check-config-js
+        name: Check for config.js in staging
+        entry: bash -c 'if git diff --cached --name-only | grep -q "^config\.js$"; then echo "ERROR: config.js should never be committed! It is in .gitignore."; exit 1; fi'
+        language: system
+        stages: [commit]
+

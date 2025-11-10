@@ -32,7 +32,11 @@ Cloudflare Workers act as a secure proxy between your frontend and the RapidAPI 
 5. Paste it into the Cloudflare Worker editor
 6. Click "Save and Deploy"
 
-### 4. Add Your API Key as Environment Variable
+### 4. Add Environment Variables
+
+You need to add **two** environment variables for security:
+
+#### 4a. Add Your API Key
 
 1. Go back to your Worker's main page (click the worker name in the breadcrumb)
 2. Click on "Settings" tab
@@ -41,10 +45,23 @@ Cloudflare Workers act as a secure proxy between your frontend and the RapidAPI 
 5. Enter:
    - **Variable name:** `RAPIDAPI_KEY`
    - **Value:** Your actual RapidAPI key (get it from [RapidAPI Dashboard](https://rapidapi.com/developer/dashboard))
-   - **Type:** Leave as "Plaintext" for now (you can use "Secret" for extra security)
+   - **Type:** **"Secret"** (recommended for production)
 6. Click "Save"
 
-> **Note:** For production, it's recommended to use "Secret" type for the API key. Cloudflare will encrypt it and it won't be visible after saving.
+> **Note:** Using "Secret" type encrypts the API key and it won't be visible after saving.
+
+#### 4b. Add Allowed Origins (CORS Security)
+
+1. Still in "Variables" section, click "Add variable" again
+2. Enter:
+   - **Variable name:** `ALLOWED_ORIGINS`
+   - **Value:** Comma-separated list of allowed origins, for example:
+     - Production: `https://yourdomain.com,https://www.yourdomain.com`
+     - With local dev: `https://yourdomain.com,http://localhost:8000,http://127.0.0.1:8000`
+   - **Type:** **"Secret"** (recommended)
+3. Click "Save"
+
+> **⚠️ Security Note:** Only origins listed in `ALLOWED_ORIGINS` will be able to access your Worker. This prevents unauthorized sites from using your Worker and consuming your API quota.
 
 ### 5. Get Your Worker URL
 
@@ -57,16 +74,21 @@ Cloudflare Workers act as a secure proxy between your frontend and the RapidAPI 
 
 ### 6. Update Your Frontend Code
 
+⚠️ **IMPORTANT**: Do NOT commit your Worker URL to the repository!
+
 1. Open `script.js` in your project
 2. Find the line:
    ```javascript
    const WORKER_URL = 'YOUR_CLOUDFLARE_WORKER_URL';
    ```
-3. Replace it with your actual Worker URL:
+3. Replace it with your actual Worker URL **locally** (for your deployment only):
    ```javascript
-   const WORKER_URL = 'https://twitter-api-proxy.your-subdomain.workers.dev';
+   const WORKER_URL = 'https://your-worker-name.your-subdomain.workers.dev';
    ```
-4. Save the file
+4. **DO NOT** commit this change to Git
+5. If using Git, add `script.js` to `.git/info/exclude` or use a local override
+
+> **⚠️ Security Warning**: Never commit your real Worker URL to the repository. If you fork this project, you must deploy your own Worker and set the URL locally. Sharing your Worker URL allows anyone to use it and consume your API quota.
 
 ### 7. Test Your Setup
 
@@ -98,9 +120,12 @@ Now that your API key is secure, you can safely deploy your site to any platform
 
 ### CORS Errors
 
-- The Worker code includes CORS headers, but if you still see CORS errors:
+- If you see CORS errors, check:
 - Make sure you deployed the full `cloudflare-worker.js` code
-- Check that the Worker is handling OPTIONS requests correctly
+- Verify `ALLOWED_ORIGINS` environment variable is set correctly
+- Check that your frontend origin exactly matches what's in `ALLOWED_ORIGINS`
+- Ensure no trailing slashes or protocol mismatches (http vs https)
+- The Worker now uses origin allowlist (not wildcard), so your domain must be explicitly allowed
 
 ### Worker Not Responding
 
@@ -121,15 +146,40 @@ Now that your API key is secure, you can safely deploy your site to any platform
 ## Security Best Practices
 
 ✅ **Do:**
-- Use environment variables for API keys
+- Use environment variables for API keys (Cloudflare Secrets)
+- Set `ALLOWED_ORIGINS` to restrict CORS access
 - Keep your Worker code updated
 - Monitor your Worker usage in Cloudflare Dashboard
 - Use "Secret" type for sensitive environment variables
+- Enable Cloudflare WAF/rate limiting if available
+- Rotate credentials if they were ever exposed (see `ROTATE.md`)
 
 ❌ **Don't:**
 - Commit API keys to version control
-- Share your Worker URL if it's not rate-limited
+- Commit real Worker URLs to the repository
+- Share your Worker URL publicly if it's not rate-limited
+- Use wildcard CORS (`*`) in production
 - Use the local development method (`config.js`) in production
+- Share your Worker URL with unauthorized parties
+
+## CORS Security
+
+The Worker now uses an **origin allowlist** instead of wildcard CORS. This means:
+
+- ✅ Only origins listed in `ALLOWED_ORIGINS` can access your Worker
+- ✅ Requests from unauthorized domains will be blocked
+- ✅ This protects your API quota from abuse
+- ✅ You must add your frontend domain(s) to `ALLOWED_ORIGINS`
+
+**Example `ALLOWED_ORIGINS` values:**
+- Single domain: `https://yourdomain.com`
+- Multiple domains: `https://yourdomain.com,https://www.yourdomain.com`
+- With local dev: `https://yourdomain.com,http://localhost:8000`
+
+**Testing**: If CORS is blocking your requests, check:
+1. Your frontend origin matches exactly what's in `ALLOWED_ORIGINS`
+2. No trailing slashes or protocol mismatches
+3. `ALLOWED_ORIGINS` is set correctly in Cloudflare Worker variables
 
 ## Custom Domain (Optional)
 

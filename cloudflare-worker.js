@@ -9,44 +9,53 @@
  * 2. Create a new Worker
  * 3. Copy this code into the worker
  * 4. Add environment variable: RAPIDAPI_KEY with your API key
- * 5. Deploy the worker
- * 6. Update the WORKER_URL in script.js with your worker's URL
+ * 5. Add environment variable: ALLOWED_ORIGINS with comma-separated origins (e.g., "https://yourdomain.com,http://localhost:8000")
+ * 6. Deploy the worker
+ * 7. Update the WORKER_URL in script.js with your worker's URL
  */
 
 const RAPIDAPI_HOST = 'twitter241.p.rapidapi.com';
 
+// Build CORS headers based on origin allowlist
+function buildCorsHeaders(origin, allowed) {
+  const allowedOrigins = (allowed || '').split(',').map(s => s.trim()).filter(Boolean);
+  const allow = allowedOrigins.includes(origin) ? origin : 'null';
+  
+  return {
+    'Access-Control-Allow-Origin': allow,
+    'Vary': 'Origin',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+    'Content-Type': 'application/json'
+  };
+}
+
 export default {
   async fetch(request, env) {
+    const origin = request.headers.get('Origin') || '';
+    const cors = buildCorsHeaders(origin, env.ALLOWED_ORIGINS);
+    
     // Get the API key from environment variables
     const apiKey = env.RAPIDAPI_KEY;
     
     if (!apiKey) {
       return new Response(JSON.stringify({ error: 'API key not configured' }), {
         status: 500,
-        headers: { 'Content-Type': 'application/json' }
+        headers: cors
       });
     }
 
     // Handle CORS preflight requests
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-          'Access-Control-Max-Age': '86400',
-        }
-      });
+      return new Response(null, { headers: cors });
     }
 
     // Only allow GET requests
     if (request.method !== 'GET') {
       return new Response(JSON.stringify({ error: 'Method not allowed' }), {
         status: 405,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: cors
       });
     }
 
@@ -55,13 +64,17 @@ export default {
       const url = new URL(request.url);
       const endpoint = url.searchParams.get('endpoint');
 
+      // If no endpoint provided, return helpful information
       if (!endpoint) {
-        return new Response(JSON.stringify({ error: 'Missing endpoint parameter' }), {
-          status: 400,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          }
+        return new Response(JSON.stringify({ 
+          message: 'Twitter API Proxy Worker',
+          status: 'active',
+          usage: 'This Worker requires an endpoint parameter. Use: ?endpoint=/user&username=elonmusk',
+          example: `${url.origin}/?endpoint=/user&username=elonmusk`,
+          note: 'This Worker is designed to be called from a frontend application, not accessed directly.'
+        }), {
+          status: 200,
+          headers: cors
         });
       }
 
@@ -91,8 +104,7 @@ export default {
       return new Response(JSON.stringify(data), {
         status: apiResponse.status,
         headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
+          ...cors,
           'Cache-Control': 'public, max-age=300' // Cache for 5 minutes
         }
       });
@@ -100,10 +112,7 @@ export default {
     } catch (error) {
       return new Response(JSON.stringify({ error: error.message }), {
         status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
+        headers: cors
       });
     }
   }

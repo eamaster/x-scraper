@@ -1,0 +1,73 @@
+title = "X Scraper Secret Detection"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist for known test strings and example values"
+paths = [
+  '''config\.example\.js''',
+  '''README\.md''',
+  '''CLOUDFLARE_SETUP\.md''',
+  '''ROTATE\.md''',
+  '''SECURITY-REVIEW\.md''',
+]
+
+commits = [
+  '''^Initial commit''',
+]
+
+regexes = [
+  '''YOUR_RAPIDAPI_KEY_HERE''',
+  '''YOUR_CLOUDFLARE_WORKER_URL''',
+  '''your_actual_rapidapi_key_here''',
+  '''your-worker\.your-subdomain\.workers\.dev''',
+]
+
+[[rules]]
+id = "rapidapi-key"
+description = "RapidAPI Key"
+regex = '''(?i)(rapidapi[_-]?key|rapid[_-]?api[_-]?key)\s*[=:]\s*['"]?([a-z0-9]{40,})['"]?'''
+entropy = 3.5
+tags = ["api", "key", "rapidapi"]
+allowlist = {
+  paths = [
+    '''config\.example\.js''',
+    '''README\.md''',
+    '''CLOUDFLARE_SETUP\.md''',
+  ],
+  regexes = [
+    '''YOUR_RAPIDAPI_KEY_HERE''',
+    '''your_actual_rapidapi_key_here''',
+  ],
+}
+
+[[rules]]
+id = "cloudflare-worker-url"
+description = "Cloudflare Worker URL"
+regex = '''https://[a-z0-9-]+\.(smah0085|workers)\.workers\.dev'''
+tags = ["cloudflare", "url"]
+allowlist = {
+  paths = [
+    '''README\.md''',
+    '''CLOUDFLARE_SETUP\.md''',
+  ],
+}
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key"
+regex = '''(?i)(api[_-]?key|apikey)\s*[=:]\s*['"]?([a-z0-9]{32,})['"]?'''
+entropy = 3.5
+tags = ["api", "key"]
+allowlist = {
+  paths = [
+    '''config\.example\.js''',
+    '''README\.md''',
+  ],
+  regexes = [
+    '''YOUR_RAPIDAPI_KEY_HERE''',
+    '''your_actual_rapidapi_key_here''',
+  ],
+}
+
