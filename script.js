@@ -121,10 +121,17 @@ function normalizeUser(json) {
         '';
     const verified = !!(dget(u, 'verified') || dget(u, 'is_blue_verified'));
 
-    const tweets = dget(u, 'statuses_count');
-    const followers = dget(u, 'followers_count');
-    const following = dget(u, 'friends_count');
-    const favourites = dget(u, 'favourites_count') ?? dget(u, 'favouritesCount');
+    // Probe for metrics in multiple places to avoid zeros on valid users
+    const tweets     = dget(u, 'statuses_count') ??
+                       dget(json, 'result.data.user.result.legacy.statuses_count') ??
+                       dget(json, 'user.legacy.statuses_count');
+    const followers  = dget(u, 'followers_count') ??
+                       dget(json, 'result.data.user.result.legacy.followers_count');
+    const following  = dget(u, 'friends_count') ??
+                       dget(json, 'result.data.user.result.legacy.friends_count');
+    const favourites = dget(u, 'favourites_count') ??
+                       dget(u, 'favouritesCount') ??
+                       dget(json, 'result.data.user.result.legacy.favourites_count');
 
     return {
         name,
