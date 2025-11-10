@@ -25,6 +25,18 @@ const WORKER_URL = resolveWorkerURL();
 // ---- helpers ----
 function dget(o, p) { if (!o || !p) return; return p.replace(/\[(\d+)\]/g, '.$1').split('.').reduce((x,k)=> x && k in x ? x[k] : undefined, o); }
 
+// Shallow DFS to find the first object that contains any of the given keys
+function findFirst(obj, predicate) {
+  const stack = [obj];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (cur && typeof cur === 'object') {
+      if (predicate(cur)) return cur;
+      for (const v of Object.values(cur)) if (v && typeof v === 'object') stack.push(v);
+    }
+  }
+}
+
 // Extract tweets from modern /search-v2 structure: result.timeline.instructions[].entries[].content.itemContent.tweet_results.result
 function extractTweetsFromSearchV2(json) {
   const out = [];
@@ -95,6 +107,11 @@ function normalizeUser(json) {
         if (first) u = first;
     }
 
+    if (!u) {
+        const found = findFirst(json, o => ('screen_name' in o) || ('name' in o));
+        if (found) u = found;
+    }
+
     const name = dget(u, 'name') || dget(json, 'user.name') || '';
     const username = dget(u, 'screen_name') || dget(json, 'user.screen_name') || '';
     const description = dget(u, 'description') || '';
@@ -117,40 +134,6 @@ function normalizeUser(json) {
         verified,
         metrics: { tweets, followers, following, favourites }
     };
-}
-
-function extractTweetsFromSearch(json) {
-    let entries = dget(json, 'data.instructions') || dget(json, 'data.entry') || dget(json, 'data.entries');
-    if (entries) {
-        const results = [];
-        const visit = (node) => {
-            if (!node) return;
-            if (Array.isArray(node)) {
-                node.forEach(visit);
-                return;
-            }
-            if (typeof node === 'object') {
-                if (node.tweet_result) {
-                    const legacy = dget(node, 'tweet_result.result.legacy') || dget(node, 'tweet_result.legacy');
-                    if (legacy && (legacy.full_text || legacy.text)) {
-                        const user = dget(node, 'tweet_result.result.core.user_results.result');
-                        results.push(user ? { legacy, user } : { legacy });
-                    }
-                }
-                Object.values(node).forEach(visit);
-            }
-        };
-        visit(entries);
-        if (results.length) return results;
-    }
-
-    if (dget(json, 'globalObjects.tweets')) {
-        return Object.values(json.globalObjects.tweets).map(t => ({ legacy: t }));
-    }
-
-    if (Array.isArray(json.tweets)) return json.tweets.map(t => (t.legacy ? t : { legacy: t }));
-
-    throw new Error('UNEXPECTED_SEARCH_PAYLOAD');
 }
 
 function extractCommunityTopics(json) {
@@ -306,31 +289,7 @@ document.getElementById('search-btn').addEventListener('click', async () => {
     const container = document.getElementById('search-results');
     if (!query) { showError(container, 'Please enter a search query'); return; }
     showLoading(container);
-    try {
-      let data = await fetchFromAPI('/search-v2', { query, type, count });
-
-      if (type === 'People') {
-        let users = extractUsersFromSearch(data);
-        if (!users.length) {
-          data = await fetchFromAPI('/search', { query, type, count });
-          users = extractUsersFromSearch(data);
-        }
-        displayUsers(users, container, `People for "${query}"`);
-        return;
-      }
-
-      let tweets = extractTweetsFromSearchV2(data);
-      if (!tweets.length) {
-        data = await fetchFromAPI('/search', { query, type, count });
-        tweets = extractTweetsFromSearchV2(data);
-        if (!tweets.length) tweets = extractTweetsLegacy(data);
-      }
-
-      displayTweets(tweets, container, `Search Results for "${query}"`);
-    } catch (error) {
-      console.error('Search error:', error);
-      showError(container, 'Search failed. Try another query.');
-    }
+    await doExplore(query, type, count, container);
 });
 
 document.getElementById('autocomplete-btn').addEventListener('click', async () => {
@@ -546,9 +505,13 @@ async function getTweetInteractions(type) {
         const params = { pid: tweetId, count };
         if (type === 'comments') params.rankingMode = 'Relevance';
         const data = await fetchFromAPI(endpoints[type], params);
-        const items = data.result?.timeline || data.timeline || [];
-        if (type === 'likes') { displayUsers(items, container, type.charAt(0).toUpperCase() + type.slice(1)); }
-        else { displayTweets(items, container, type.charAt(0).toUpperCase() + type.slice(1)); }
+        if (type === 'likes') {
+            const users = extractUsersFromResponse(data);
+            displayUsers(users, container, type.charAt(0).toUpperCase() + type.slice(1));
+        } else {
+            const tweets = extractTweetsFromResponse(data);
+            displayTweets(tweets, container, type.charAt(0).toUpperCase() + type.slice(1));
+        }
     } catch (error) { showError(container, error.message); }
 }
 
@@ -583,7 +546,8 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
     showLoading(container);
     try {
         const data = await fetchFromAPI('/explore-community-timeline', {});
-        displayTweets(data.result?.timeline || [], container, 'Community Timeline');
+        const tweets = extractTweetsFromResponse(data);
+        displayTweets(tweets, container, 'Community Timeline');
     } catch (error) { showError(container, error.message); }
 });
 
@@ -605,7 +569,8 @@ document.getElementById('get-community-tweets-btn').addEventListener('click', as
     showLoading(container);
     try {
         const data = await fetchFromAPI('/community-tweets', { communityId, searchType: 'Default', rankingMode: 'Relevance', count: 20 });
-        displayTweets(data.result?.timeline || [], container, 'Community Tweets');
+        const tweets = extractTweetsFromResponse(data);
+        displayTweets(tweets, container, 'Community Tweets');
     } catch (error) { showError(container, error.message); }
 });
 
@@ -643,24 +608,32 @@ document.getElementById('get-community-about-btn').addEventListener('click', asy
 });
 
 async function doExplore(query, type = 'Top', count = 20, container) {
-    try {
-        let data = await fetchFromAPI('/search-v2', { query, type, count });
-        let items;
-        try {
-            items = extractTweetsFromSearch(data);
-        } catch (parseErr) {
-            data = await fetchFromAPI('/search', { query, type, count });
-            items = extractTweetsFromSearch(data);
-        }
-        if (!items || items.length === 0) {
-            showWarning(container, 'No results found for this query.');
-            return;
-        }
-        renderSearchResults(items, container, query);
-    } catch (err) {
-        console.error('Explore error:', err);
-        showWarning(container, 'Search failed. Try another query or reduce count.');
+  try {
+    let data = await fetchFromAPI('/search-v2', { query, type, count });
+    if (type === 'People') {
+      let users = extractUsersFromSearch(data);
+      if (!users.length) {
+        data = await fetchFromAPI('/search', { query, type, count });
+        users = extractUsersFromSearch(data);
+      }
+      displayUsers(users, container, `People for "${query}"`);
+      return;
     }
+    let tweets = extractTweetsFromSearchV2(data);
+    if (!tweets.length) {
+      data = await fetchFromAPI('/search', { query, type, count });
+      tweets = extractTweetsFromSearchV2(data);
+      if (!tweets.length) tweets = extractTweetsLegacy(data);
+    }
+    if (!tweets.length) {
+      showWarning(container, 'No results found for this query.');
+      return;
+    }
+    renderSearchResults(tweets, container, query);
+  } catch (err) {
+    console.error('Explore error:', err);
+    showWarning(container, 'Search failed. Try another query or reduce count.');
+  }
 }
 
 async function doGetTopics(container) {
@@ -707,7 +680,8 @@ document.getElementById('get-list-timeline-btn').addEventListener('click', async
     showLoading(container);
     try {
         const data = await fetchFromAPI('/list-timeline', { listId });
-        displayTweets(data.result?.timeline || [], container, 'List Timeline');
+        const tweets = extractTweetsFromResponse(data);
+        displayTweets(tweets, container, 'List Timeline');
     } catch (error) { showError(container, error.message); }
 });
 
