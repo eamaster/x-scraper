@@ -44,19 +44,57 @@ function setSelectedCommunity(c){
 }
 
 async function getCommunityIdOrResolve(){
-  // 1) If user has selected a community, use it
-  if (selectedCommunity?.id) return selectedCommunity.id;
-  // 2) If there's an ID typed, use it
+  // 1) If user has selected a community, use it (validate it's numeric)
+  if (selectedCommunity?.id) {
+    const id = String(selectedCommunity.id).trim();
+    if (/^\d+$/.test(id)) {
+      console.log(`✅ Using selected community ID: ${id}`);
+      return id;
+    }
+    console.warn('⚠️ Selected community ID is not numeric:', id);
+  }
+  
+  // 2) If there's an ID typed, validate it's numeric
   const typed = (document.getElementById('community-id-input')?.value || '').trim();
-  if (typed) return typed;
-  // 3) Resolve from the keyword search automatically (pick best match)
+  if (typed) {
+    if (/^\d+$/.test(typed)) {
+      console.log(`✅ Using typed community ID: ${typed}`);
+      return typed;
+    } else {
+      const errorMsg = `Invalid community ID: "${typed}". Community ID must be a number. Please select a community from search results or enter a numeric ID.`;
+      console.error('❌', errorMsg);
+      throw new Error(errorMsg);
+    }
+  }
+  
+  // 3) Resolve from the keyword search automatically (pick best match with numeric ID)
   const kw = (document.getElementById('community-search-input')?.value || '').trim();
-  const q = kw || 'football';
-  const searchData = await fetchFromAPI('/search-community', { query: q, count: 20 });
+  if (!kw) {
+    const errorMsg = 'No community ID provided. Please search for a community and select one, or enter a numeric community ID.';
+    console.error('❌', errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  console.log(`🔍 Auto-resolving community ID from keyword: "${kw}"`);
+  const searchData = await fetchFromAPI('/search-community', { query: kw, count: 20 });
   const list = extractCommunitiesFromResponse(searchData);
-  if (!list.length) return null;
-  setSelectedCommunity(list[0]);
-  return selectedCommunity.id || null;
+  if (!list.length) {
+    const errorMsg = `No communities found for "${kw}". Please try a different search term or enter a numeric community ID manually.`;
+    console.error('❌', errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  // Find first community with a valid numeric ID
+  const validCommunity = list.find(c => c.id && /^\d+$/.test(String(c.id)));
+  if (!validCommunity) {
+    const errorMsg = `Found communities for "${kw}" but none have valid numeric IDs. Please enter a numeric community ID manually.`;
+    console.error('❌', errorMsg);
+    throw new Error(errorMsg);
+  }
+  
+  setSelectedCommunity(validCommunity);
+  console.log(`✅ Auto-selected community: "${validCommunity.name}" (ID: ${validCommunity.id})`);
+  return validCommunity.id;
 }
 
 // Build a users index from modern search/list/community timelines and legacy globalObjects
@@ -824,59 +862,119 @@ function resolveTopicIds(keyword, topics){
 
 function extractCommunitiesFromResponse(json) {
   const out = [];
+  
+  console.log('🔍 Extracting communities from response with keys:', Object.keys(json || {}));
+  console.log('🔍 Sample response structure:', JSON.stringify(json, null, 2).substring(0, 1000));
 
   const pushNorm = (raw) => {
     if (!raw) return;
     const r = raw.community || raw.community_results?.result || raw.result || raw;
-    const id  = r.community_id || r.rest_id || r.id_str || r.id;
-    const name = r.name || r.community_name || r.display_name || r.topic || 'Community';
-    const desc = r.description || r.summary || '';
+    if (!r || typeof r !== 'object') return;
+    
+    // Try multiple ID paths - must be numeric
+    const idRaw = r.community_id || r.rest_id || r.id_str || r.id || r.object_id;
+    const id = idRaw ? String(idRaw).trim() : '';
+    // Only accept numeric IDs
+    if (id && !/^\d+$/.test(id)) {
+      console.log('⚠️ Skipping community with non-numeric ID:', id);
+      return;
+    }
+    
+    const name = r.name || r.community_name || r.display_name || r.topic || r.title || 'Community';
+    const desc = r.description || r.summary || r.bio || '';
     const members =
-      r.member_count ?? r.members_count ?? r.stats?.member_count ?? 0;
+      r.member_count ?? r.members_count ?? r.stats?.member_count ?? r.members ?? 0;
     const avatar =
-      r.avatar?.image_url || r.avatar_image?.image_url || '';
+      r.avatar?.image_url || 
+      r.avatar_image?.image_url || 
+      r.profile_image_url_https ||
+      r.profile_image_url ||
+      '';
 
-    out.push({ id, name, desc, members, avatar });
+    if (id || name !== 'Community') {
+      out.push({ id, name, desc, members, avatar });
+      console.log(`  ✓ Added community: "${name}" (ID: ${id || 'none'})`);
+    }
   };
 
-  // 1) Common shapes
-  const direct = json?.result?.communities || json?.communities || json?.list;
-  if (Array.isArray(direct)) direct.forEach(pushNorm);
+  // 1) Direct arrays at root level
+  const direct = json?.result?.communities || json?.communities || json?.list || json?.data?.communities;
+  if (Array.isArray(direct) && direct.length > 0) {
+    console.log(`📋 Found ${direct.length} communities in direct array`);
+    direct.forEach(pushNorm);
+  }
 
   // 2) Timeline instructions
   const ins = json?.result?.timeline?.instructions || [];
-  for (const i of ins) {
-    const es = i.entries || i.addEntries || i.moduleItems || [];
-    for (const e of es) {
-      const c1 = e?.content?.itemContent?.community_results?.result;
-      const c2 = e?.content?.itemContent?.community;
-      const c3 = e?.content?.community_results?.result;
-      const c4 = e?.content?.community;
-      [c1, c2, c3, c4].forEach(pushNorm);
+  if (ins.length > 0) {
+    console.log(`📋 Found ${ins.length} timeline instructions`);
+    for (const i of ins) {
+      const es = i.entries || i.addEntries || i.moduleItems || [];
+      for (const e of es) {
+        if (!e || typeof e !== 'object') continue;
+        const c1 = e?.content?.itemContent?.community_results?.result;
+        const c2 = e?.content?.itemContent?.community;
+        const c3 = e?.content?.community_results?.result;
+        const c4 = e?.content?.community;
+        const c5 = e?.community_results?.result;
+        const c6 = e?.community;
+        [c1, c2, c3, c4, c5, c6].forEach(pushNorm);
+      }
     }
   }
 
-  // 3) Deep scan for obvious arrays of communities
+  // 3) Check for communities in data.result structure
+  if (!out.length && json?.result) {
+    console.log('🔍 Checking result structure...');
+    // Try various result paths
+    const resultPaths = [
+      json.result.communities,
+      json.result.data?.communities,
+      json.result.community,
+      json.result.community_results?.result,
+    ];
+    for (const path of resultPaths) {
+      if (Array.isArray(path)) {
+        console.log(`📋 Found ${path.length} communities in result path`);
+        path.forEach(pushNorm);
+      } else if (path && typeof path === 'object') {
+        pushNorm(path);
+      }
+    }
+  }
+
+  // 4) Deep scan for obvious arrays of communities
   if (!out.length) {
+    console.log('🔍 Using deep scan for communities...');
     const stack = [json];
+    const visited = new WeakSet();
     while (stack.length) {
       const cur = stack.pop();
-      if (cur && typeof cur === 'object') {
-        for (const v of Object.values(cur)) {
-          if (Array.isArray(v)) {
-            for (const item of v) {
-              if (item && typeof item === 'object') {
-                const looksLikeCommunity =
-                  'community_id' in item ||
-                  'community' in item ||
-                  'community_results' in item ||
-                  item?.__typename === 'Community';
-                if (looksLikeCommunity) pushNorm(item);
-              }
+      if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
+      visited.add(cur);
+      
+      // Check if this object looks like a community
+      const looksLikeCommunity =
+        ('community_id' in cur && /^\d+$/.test(String(cur.community_id))) ||
+        ('community' in cur) ||
+        ('community_results' in cur) ||
+        (cur?.__typename === 'Community') ||
+        (cur?.rest_id && /^\d+$/.test(String(cur.rest_id)) && (cur.name || cur.community_name));
+        
+      if (looksLikeCommunity) {
+        pushNorm(cur);
+      }
+      
+      // Walk children
+      for (const v of Object.values(cur)) {
+        if (Array.isArray(v)) {
+          for (const item of v) {
+            if (item && typeof item === 'object' && !visited.has(item)) {
+              stack.push(item);
             }
-          } else if (v && typeof v === 'object') {
-            stack.push(v);
           }
+        } else if (v && typeof v === 'object' && !visited.has(v)) {
+          stack.push(v);
         }
       }
     }
@@ -1219,10 +1317,19 @@ function renderLists(container, lists, title = 'Lists') {
 function handleCommunitySelectClick(e) {
     const btn = e.target.closest('.select-community-btn');
     if (!btn) return;
+    const communityId = btn.dataset.communityId;
+    const communityName = btn.dataset.communityName;
+    
+    if (!communityId) {
+        alert(`Community "${communityName}" has no ID and cannot be used for community details. Please select a community with a numeric ID.`);
+        return;
+    }
+    
     setSelectedCommunity({
-        id: btn.dataset.communityId,
-        name: btn.dataset.communityName
+        id: communityId,
+        name: communityName
     });
+    console.log(`✅ Selected community: "${communityName}" (ID: ${communityId})`);
 }
 
 document.getElementById('search-community-btn').addEventListener('click', async () => {
@@ -1236,26 +1343,28 @@ document.getElementById('search-community-btn').addEventListener('click', async 
             container.innerHTML = `<p>No communities found.</p>`;
             return;
         }
+        console.log(`🎨 Rendering ${list.length} communities`);
         // Render simple cards with a Select button
-        container.innerHTML = list.map((c, i) => `
-      <div class="community-card" style="margin-bottom:10px;">
+        container.innerHTML = `<h3>Found ${list.length} communities</h3>` + list.map((c, i) => `
+      <div class="community-card" style="margin-bottom:10px;padding:12px;border:1px solid #ddd;border-radius:8px;">
         <div style="display:flex;align-items:center;gap:12px;">
           ${c.avatar ? `<img src="${esc(c.avatar)}" alt="" width="40" height="40" style="border-radius:8px;object-fit:cover">` : ''}
-          <div>
+          <div style="flex:1;">
             <strong>${esc(c.name || 'Community')}</strong>
-            ${c.id ? `<span class="badge badge-count">${esc(c.id)}</span>` : ''}
-            ${c.members ? `<div class="tweet-footer"><span>👥 ${esc(c.members)} members</span></div>` : ''}
+            ${c.id ? `<span class="badge badge-count" style="margin-left:8px;">ID: ${esc(c.id)}</span>` : '<span class="badge" style="margin-left:8px;opacity:0.6;">No ID</span>'}
+            ${c.members ? `<div class="tweet-footer" style="margin-top:4px;"><span>👥 ${esc(c.members)} members</span></div>` : ''}
           </div>
-          <div style="margin-left:auto;">
-            <button class="btn-secondary select-community-btn" data-community-id="${esc(c.id || '')}" data-community-name="${esc(c.name || 'Community')}">Select</button>
+          <div>
+            <button class="btn-secondary select-community-btn" data-community-id="${esc(c.id || '')}" data-community-name="${esc(c.name || 'Community')}" ${!c.id ? 'style="opacity:0.7;" title="This community has no ID and cannot be used for details"' : ''}>Select</button>
           </div>
         </div>
-        ${c.desc ? `<p style="margin-top:8px">${esc(c.desc)}</p>` : ''}
+        ${c.desc ? `<p style="margin-top:8px;color:#666;">${esc(c.desc)}</p>` : ''}
       </div>
     `).join('');
         // Remove old listener if exists, then add new one
         container.removeEventListener('click', handleCommunitySelectClick);
         container.addEventListener('click', handleCommunitySelectClick);
+        console.log('✅ Community cards rendered with select handlers');
     } catch (err) {
         console.error('Community search error:', err);
         showError(container, 'Could not load communities.');
@@ -1374,7 +1483,10 @@ document.getElementById('get-community-details-btn').addEventListener('click', a
     showLoading(container);
     try {
         const communityId = await getCommunityIdOrResolve();
-        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
+        if (!communityId) {
+            showWarning(container, 'No community ID found. Please search for a community and select one, or enter a numeric community ID.');
+            return;
+        }
         const details = await fetchFromAPI('/community-details', { communityId });
         const name = dget(details, 'result.name') || dget(details, 'result.community.name') || 'Community';
         const desc = dget(details, 'result.description') || dget(details, 'result.community.description') || '';
@@ -1389,7 +1501,8 @@ document.getElementById('get-community-details-btn').addEventListener('click', a
     `;
     } catch (err) {
         console.error('Community details error:', err);
-        showError(container, 'Could not load community details.');
+        const errorMsg = err.message || 'Could not load community details.';
+        showError(container, errorMsg);
     }
 });
 
@@ -2070,7 +2183,7 @@ function resolveAuthorFromTweet(tweet, usersIndex = {}) {
     }
   }
   
-  return { name: 'Unknown', username: 'unknown' };
+    return { name: 'Unknown', username: 'unknown' };
 }
 
 function normalizeTweetAndAuthor(t, usersIndex) {
