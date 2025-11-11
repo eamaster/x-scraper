@@ -909,56 +909,98 @@ function renderCommunities(list, container, title = 'Communities') {
 
 // Normalize a "list" object (works for multiple shapes)
 function normalizeList(node) {
-  // Common candidate fields across shapes
+  if (!node || typeof node !== 'object') {
+    return { id: '', name: 'Untitled list', description: 'No description', memberCount: 0, subscriberCount: 0, ownerHandle: '', ownerName: '' };
+  }
+
+  // Common candidate fields across shapes - try multiple paths
   const id =
+    node.id_str ||
+    node.rest_id ||
+    node.list_id ||
+    node.id ||
+    node.legacy?.id_str ||
+    node.legacy?.id ||
     dget(node, 'id_str') ||
     dget(node, 'rest_id') ||
     dget(node, 'list_id') ||
     dget(node, 'id') ||
-    dget(node, 'legacy.id_str') || '';
+    dget(node, 'legacy.id_str') ||
+    String(node.id || '').trim() ||
+    '';
 
   const name =
+    node.name ||
+    node.title ||
+    node.legacy?.name ||
+    node.legacy?.title ||
     dget(node, 'name') ||
-    dget(node, 'legacy.name') ||
     dget(node, 'title') ||
+    dget(node, 'legacy.name') ||
+    dget(node, 'legacy.title') ||
     'Untitled list';
 
   const description =
+    node.description ||
+    node.summary ||
+    node.legacy?.description ||
+    node.legacy?.summary ||
     dget(node, 'description') ||
+    dget(node, 'summary') ||
     dget(node, 'legacy.description') ||
+    dget(node, 'legacy.summary') ||
     'No description';
 
   const memberCount =
+    node.member_count ||
+    node.members_count ||
+    node.legacy?.member_count ||
+    node.legacy?.members_count ||
     dget(node, 'member_count') ||
     dget(node, 'members_count') ||
     dget(node, 'legacy.member_count') ||
+    dget(node, 'legacy.members_count') ||
     0;
 
   const subscriberCount =
+    node.subscriber_count ||
+    node.subscribers_count ||
+    node.legacy?.subscriber_count ||
+    node.legacy?.subscribers_count ||
     dget(node, 'subscriber_count') ||
     dget(node, 'subscribers_count') ||
     dget(node, 'legacy.subscriber_count') ||
+    dget(node, 'legacy.subscribers_count') ||
     0;
 
-  // Try to resolve owner
+  // Try to resolve owner - check multiple paths
   const owner =
+    node.user ||
+    node.owner ||
+    node.legacy?.user ||
+    node.legacy?.owner ||
+    node.user_results?.result ||
+    node.owner_results?.result ||
     dget(node, 'user') ||
     dget(node, 'owner') ||
+    dget(node, 'legacy.user') ||
     dget(node, 'legacy.owner') ||
-    dget(node, 'owner_results.result') || {};
+    dget(node, 'user_results.result') ||
+    dget(node, 'owner_results.result') ||
+    {};
 
-  const ownerLegacy = owner.legacy || owner;
-  const ownerHandle = ownerLegacy?.screen_name || '';
-  const ownerName = ownerLegacy?.name || '';
+  const ownerLegacy = owner?.legacy || owner || {};
+  const ownerHandle = ownerLegacy?.screen_name || owner?.screen_name || '';
+  const ownerName = ownerLegacy?.name || owner?.name || '';
 
   return {
-    id: String(id || '').trim(),
-    name,
-    description,
-    memberCount,
-    subscriberCount,
-    ownerHandle,
-    ownerName
+    id: String(id).trim(),
+    name: String(name).trim() || 'Untitled list',
+    description: String(description).trim() || 'No description',
+    memberCount: Number(memberCount) || 0,
+    subscriberCount: Number(subscriberCount) || 0,
+    ownerHandle: String(ownerHandle).trim(),
+    ownerName: String(ownerName).trim()
   };
 }
 
@@ -966,39 +1008,85 @@ function normalizeList(node) {
 function extractListsFromResponse(payload) {
   const lists = [];
   const seen = new Set();
-  const stack = [payload];
 
-  // Direct arrays first
-  const direct = dget(payload, 'result.lists') || dget(payload, 'lists') || dget(payload, 'result.data.lists');
-  if (Array.isArray(direct)) {
-    for (const item of direct) {
-      if (item && typeof item === 'object') stack.push(item);
+  // Priority 1: Direct arrays at root level (most common for /search-lists)
+  const directLists = payload?.lists || payload?.result?.lists || payload?.result?.data?.lists;
+  if (Array.isArray(directLists) && directLists.length > 0) {
+    console.log(`📋 Found ${directLists.length} lists in direct array`);
+    // Log first item structure for debugging
+    if (directLists[0]) {
+      console.log('📋 Sample list item keys:', Object.keys(directLists[0]));
+      console.log('📋 Sample list item:', JSON.stringify(directLists[0]).substring(0, 500));
+    }
+    for (const item of directLists) {
+      if (!item || typeof item !== 'object') continue;
+      // Try to normalize directly - might be wrapped in list/list_results/result
+      const node = item.list || item.list_results?.result || item.result || item;
+      const norm = normalizeList(node);
+      // Use ID if available, otherwise use index-based key or name
+      const key = norm.id || norm.name || `list-${lists.length}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        // Accept lists with name or ID (don't require both)
+        if (norm.name && norm.name !== 'Untitled list') {
+          lists.push(norm);
+          console.log(`  ✓ Added list: "${norm.name}" (ID: ${norm.id || 'none'})`);
+        } else if (norm.id) {
+          lists.push(norm);
+          console.log(`  ✓ Added list: ID ${norm.id} (name: ${norm.name || 'none'})`);
+        } else {
+          console.log(`  ✗ Skipped list: no name or ID`, norm);
+        }
+      }
+    }
+    // If we found lists in direct array, return early (most reliable)
+    if (lists.length > 0) {
+      console.log(`✅ Extracted ${lists.length} lists from direct array`);
+      return lists;
+    } else {
+      console.log(`⚠️ Found ${directLists.length} items but extracted 0 lists`);
     }
   }
 
-  // Timeline instructions
+  // Priority 2: Timeline instructions (for list timelines/details)
   const instructions = dget(payload, 'result.timeline.instructions') || [];
-  for (const ins of instructions) {
-    const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
-    for (const e of entries) {
-      if (e && typeof e === 'object') {
+  if (instructions.length > 0) {
+    console.log(`📋 Found ${instructions.length} timeline instructions`);
+    for (const ins of instructions) {
+      const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
+      for (const e of entries) {
+        if (!e || typeof e !== 'object') continue;
         const listNode = dget(e, 'content.itemContent.list') || 
                         dget(e, 'content.itemContent.list_results.result') ||
                         dget(e, 'content.list') ||
                         dget(e, 'list');
-        if (listNode) stack.push(listNode);
-        stack.push(e);
+        if (listNode) {
+          const norm = normalizeList(listNode);
+          const key = norm.id || `list-${lists.length}`;
+          if (!seen.has(key) && (norm.name !== 'Untitled list' || norm.id)) {
+            seen.add(key);
+            lists.push(norm);
+          }
+        }
       }
+    }
+    if (lists.length > 0) {
+      console.log(`✅ Extracted ${lists.length} lists from timeline instructions`);
+      return lists;
     }
   }
 
+  // Priority 3: DFS fallback to find list-like objects
+  console.log('🔍 Using DFS fallback to find lists...');
+  const stack = [payload];
   while (stack.length) {
     const cur = stack.pop();
     if (!cur || typeof cur !== 'object') continue;
 
     // Candidate: object that looks like a list
     const looksLikeList =
-      ('list' in cur) || ('list_id' in cur) || ('member_count' in cur) ||
+      ('list' in cur) || ('list_id' in cur) || 
+      ('member_count' in cur) || ('subscriber_count' in cur) ||
       cur.__typename === 'List' || 
       (cur.entryType === 'TimelineTimelineItem' && dget(cur, 'content.itemContent.list')) ||
       (('name' in cur) && (('member_count' in cur) || ('subscriber_count' in cur)));
@@ -1006,14 +1094,16 @@ function extractListsFromResponse(payload) {
     if (looksLikeList) {
       const node = cur.list || cur;
       const norm = normalizeList(node);
-      if (norm.id && !seen.has(norm.id)) {
-        seen.add(norm.id);
+      const key = norm.id || `list-${lists.length}`;
+      if (!seen.has(key) && (norm.name !== 'Untitled list' || norm.id)) {
+        seen.add(key);
         lists.push(norm);
       }
     }
 
-    // Walk children
+    // Walk children (but skip if we already processed direct arrays)
     for (const k in cur) {
+      if (k === 'lists' && Array.isArray(cur[k])) continue; // Already processed
       const v = cur[k];
       if (Array.isArray(v)) {
         for (const x of v) {
@@ -1025,6 +1115,7 @@ function extractListsFromResponse(payload) {
     }
   }
 
+  console.log(`✅ Final extracted ${lists.length} lists`);
   return lists;
 }
 
@@ -1035,34 +1126,42 @@ function renderLists(container, lists, title = 'Lists') {
     return;
   }
 
+  console.log(`🎨 Rendering ${lists.length} lists`);
   container.innerHTML = `<h3>${title}</h3>` +
-    lists.map(lst => `
-      <div class="community-card" style="cursor: pointer; margin-bottom: 10px;" data-list-id="${esc(lst.id)}">
+    lists.map((lst, idx) => {
+      const listId = lst.id || '';
+      return `
+      <div class="community-card" style="cursor: pointer; margin-bottom: 10px;" data-list-id="${esc(listId)}" data-list-index="${idx}">
         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
           <div style="flex: 1;">
-            <strong>${esc(lst.name)}</strong>
-            ${lst.id ? `<span class="badge badge-count">ID: ${esc(lst.id)}</span>` : ''}
+            <strong>${esc(lst.name || 'Untitled list')}</strong>
+            ${listId ? `<span class="badge badge-count">ID: ${esc(listId)}</span>` : '<span class="badge badge-count" style="opacity:0.6;">No ID</span>'}
           </div>
         </div>
-        <p style="margin: 8px 0; color: #65676b;">${esc(lst.description)}</p>
+        <p style="margin: 8px 0; color: #65676b;">${esc(lst.description || 'No description')}</p>
         <div class="tweet-footer">
           <span>👥 ${formatNumber(lst.memberCount || 0)} members</span>
           <span>👀 ${formatNumber(lst.subscriberCount || 0)} subscribers</span>
           ${lst.ownerHandle ? `<span>· by @${esc(lst.ownerHandle)}${lst.ownerName ? ` (${esc(lst.ownerName)})` : ''}</span>` : ''}
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
 
   // Add click handlers to list cards
   container.querySelectorAll('[data-list-id]').forEach(card => {
     card.addEventListener('click', () => {
       const listId = card.dataset.listId;
-      const input = document.getElementById('list-id-input');
-      if (input) input.value = listId;
-      // Optionally scroll to the actions section
-      const detailsBtn = document.getElementById('get-list-details-btn');
-      if (detailsBtn) {
-        detailsBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (listId) {
+        const input = document.getElementById('list-id-input');
+        if (input) input.value = listId;
+        // Optionally scroll to the actions section
+        const detailsBtn = document.getElementById('get-list-details-btn');
+        if (detailsBtn) {
+          detailsBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      } else {
+        console.warn('⚠️ Clicked list has no ID, cannot auto-fill');
       }
     });
   });
