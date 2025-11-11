@@ -56,8 +56,13 @@
         <div id="results"></div>
     </div>
 
-    <!-- Optional: Load worker-config.js for production (file is gitignored) -->
-    <script src="worker-config.js" onerror="console.log('No worker-config.js found - Worker URL must be set')"></script>
+    <!-- Prod-only override to avoid optional-config requests and 404s -->
+    <script>
+      if (location.hostname === 'hesam.me') {
+        // explicit prod override (public endpoint, not a secret)
+        window.WORKER_URL_OVERRIDE = 'https://twitter-api-proxy.smah0085.workers.dev';
+      }
+    </script>
     <script>
         function resolveWorkerURL() {
             if (typeof window.WORKER_URL_OVERRIDE === 'string' &&
