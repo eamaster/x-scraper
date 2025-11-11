@@ -295,53 +295,75 @@ function normalizeUserLite(u){
 }
 
 // For autocomplete topics (shapes vary)
-function topicMeta(t){
-  const n = t?.topic || t || {};
-  const name = n.topic_name || n.name || n.query || n.display_name || 'Topic';
-  const id   = n.topic_id   || n.id_str || n.id || '';
+function topicMeta(raw){
+  // Accept many shapes from /autocomplete:
+  // { topic: { topic_name, topic_id } }
+  // { topic_name, topic_id }, { name, id }, { display_name }, { query }
+  const t = raw?.topic ?? raw ?? {};
+  const name =
+    t.topic_name ??
+    t.name ??
+    t.display_name ??
+    t.query ??
+    t.displayName ??
+    (t.topic?.topic_name) ??
+    'Topic';
+  const id =
+    t.topic_id ??
+    t.id_str ??
+    t.id ??
+    (t.topic?.topic_id) ??
+    '';
   return { name, id };
 }
 
 function renderAutocomplete(ac, container){
-  // Deduplicate users by handle (lowercased)
-  const seen = new Set();
+  // ---- Users: dedupe by handle (case-insensitive)
+  const seenUsers = new Set();
   const users = [];
   for (const u of (ac.users || [])){
-    const nu = normalizeUserLite(u);
-    const key = nu.handle.toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    users.push(nu);
+    const L = u?.legacy || u || {};
+    const name = L.name || u?.name || 'Unknown';
+    const handle = (L.screen_name || u?.screen_name || '').toLowerCase();
+    if (!handle || seenUsers.has(handle)) continue;
+    seenUsers.add(handle);
+    const avatar = L.profile_image_url_https || L.profile_image_url || u?.avatar?.image_url || '';
+    users.push({ name, handle, avatar });
   }
-  // Normalize topics/lists/events
-  const topics = (ac.topics || []).map(topicMeta).filter(t => t.name);
+  // ---- Topics: normalize + dedupe by name+id
+  const seenTopics = new Set();
+  const topics = [];
+  for (const raw of (ac.topics || [])){
+    const t = topicMeta(raw);
+    const key = `${(t.name||'').toLowerCase()}|${t.id||''}`;
+    if (!t.name || seenTopics.has(key)) continue;
+    seenTopics.add(key);
+    topics.push(t);
+  }
+  // Lists & events (optional)
   const lists  = (ac.lists  || []).map(l => ({ name: l.name || 'List', id: l.id_str || l.id || '' }));
   const events = (ac.events || []).map(e => ({ name: e.name || 'Event' }));
-  // Build rows
+  // ---- Build rows (single-line per item)
   const userRows = users.map(u => `
     <li class="sug-item">
-      ${u.avatar ? `<img class="suggestion-avatar" src="${esc(u.avatar)}" alt="@${esc(u.handle)}">` : ''}
+      ${u.avatar ? `<img class="suggestion-avatar" src="${esc(u.avatar)}" alt="">` : ''}
       <span class="sug-name">${esc(u.name)}</span>
-      <span class="sug-handle">@${esc(u.handle)}</span>
-    </li>
-  `).join('');
+      <span class="sug-handle">(@${esc(u.handle)})</span>
+    </li>`).join('');
   const topicRows = topics.map(t => `
     <li class="sug-item">
       <span class="sug-name">#${esc(t.name)}</span>
       ${t.id ? `<span class="sug-id">(${esc(t.id)})</span>` : ''}
-    </li>
-  `).join('');
-  const listRows = lists.map(l => `
+    </li>`).join('');
+  const listRows = (lists||[]).map(l => `
     <li class="sug-item">
       <span class="sug-name">${esc(l.name)}</span>
       ${l.id ? `<span class="sug-id">(${esc(l.id)})</span>` : ''}
-    </li>
-  `).join('');
-  const eventRows = events.map(e => `
+    </li>`).join('');
+  const eventRows = (events||[]).map(e => `
     <li class="sug-item">
       <span class="sug-name">${esc(e.name)}</span>
-    </li>
-  `).join('');
+    </li>`).join('');
   const hasUsers  = users.length  > 0;
   const hasTopics = topics.length > 0;
   const hasLists  = lists.length  > 0;
@@ -349,11 +371,10 @@ function renderAutocomplete(ac, container){
   container.innerHTML = `
     <h3>Autocomplete suggestions...</h3>
     ${!(hasUsers||hasTopics||hasLists||hasEvents) ? '<p>No suggestions.</p>' : ''}
-    ${hasUsers  ? `<h4>Users</h4><ul class="suggestions">${userRows}</ul>` : ''}
+    ${hasUsers  ? `<h4>Users</h4><ul class="suggestions">${userRows}</ul>`   : ''}
     ${hasTopics ? `<h4>Topics</h4><ul class="suggestions">${topicRows}</ul>` : ''}
-    ${hasLists  ? `<h4>Lists</h4><ul class="suggestions">${listRows}</ul>` : ''}
-    ${hasEvents ? `<h4>Events</h4><ul class="suggestions">${eventRows}</ul>` : ''}
-  `;
+    ${hasLists  ? `<h4>Lists</h4><ul class="suggestions">${listRows}</ul>`   : ''}
+    ${hasEvents ? `<h4>Events</h4><ul class="suggestions">${eventRows}</ul>` : ''}`;
 }
 
 function renderCommunityTopics(topics, container) {

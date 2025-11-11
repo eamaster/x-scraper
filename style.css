@@ -443,5 +443,5 @@ button:disabled {
 .suggestions { list-style: none; padding: 0; margin: 0; }
 .sug-item { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid rgba(0,0,0,0.06); }
 .suggestion-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
-.sug-name { font-weight: 600; margin-right: 4px; }
-.sug-handle, .sug-id { opacity: 0.75; }
+.sug-name { font-weight: 600; }
+.sug-handle, .sug-id { opacity: 0.75; margin-left: 4px; }
