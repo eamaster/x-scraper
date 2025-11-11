@@ -857,22 +857,20 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
     const container = document.getElementById('community-explore-results') || document.getElementById('community-results');
     showLoading(container);
     try {
-        // Fetch all topics then resolve ids from the keyword
         const topicsData = await fetchFromAPI('/community-topics', {});
         const topics = flattenCommunityTopics(topicsData);
         const ids = resolveTopicIds(kw, topics);
-        if (!ids.length){
-            showWarning(container, `No matching topics for "${kw}". Try "soccer", "american football", "technology"…`);
-            return;
-        }
-        // Fetch timelines for each id and merge
+        if (!ids.length) { showWarning(container, `No matching topics for "${kw}". Try "soccer", "american football", "technology"...`); return; }
         const allTweets = [];
-        for (const id of ids){
+        const usersIdx = {};
+        const mergeIdx = (src) => { for (const [k,v] of Object.entries(src || {})) if (!usersIdx[k]) usersIdx[k] = v; };
+        for (const id of ids) {
             const tData = await fetchFromAPI('/explore-community-timeline', { topicId: id });
+            mergeIdx(buildUsersIndexDeep(tData));
             const ts = extractTweetsFromResponse(tData);
             allTweets.push(...ts);
         }
-        // Dedupe by tweet id if present
+        // dedupe tweets by id
         const seen = new Set();
         const unique = allTweets.filter(t => {
             const id = t?.rest_id || t?.legacy?.id_str || t?.id_str || t?.id;
@@ -880,7 +878,7 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
             if (seen.has(id)) return false;
             seen.add(id); return true;
         });
-        displayTweets(unique, container, `Community Timeline for "${kw}"`);
+        displayTweets(unique, container, `Community Timeline for "${kw}"`, { usersIndex: usersIdx });
     } catch (err) {
         console.error('Explore community timeline error:', err);
         showError(container, 'Could not load community timeline.');
@@ -888,14 +886,35 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
 });
 
 document.getElementById('get-community-details-btn').addEventListener('click', async () => {
-    const communityId = document.getElementById('community-id-input').value.trim();
-    const container = document.getElementById('community-results');
-    if (!communityId) { showError(container, 'Please enter a community ID'); return; }
+    const idInput = document.getElementById('community-id-input');
+    const kw = (document.getElementById('community-search-input')?.value || '').trim();
+    const container = document.getElementById('community-details-results') || document.getElementById('community-results');
     showLoading(container);
     try {
-        const data = await fetchFromAPI('/community-details', { communityId });
-        displayGenericResults(data, container, 'Community Details');
-    } catch (error) { showError(container, error.message); }
+        let communityId = (idInput?.value || '').trim();
+        if (!communityId) {
+            const searchData = await fetchFromAPI('/search-community', { query: kw || 'football', count: 20 });
+            const list = extractCommunitiesFromResponse(searchData);
+            if (!list.length) { showWarning(container, 'No community found. Try another keyword.'); return; }
+            communityId = list[0].id || list[0].rest_id || list[0].community_id;
+            if (idInput) idInput.value = communityId || '';
+        }
+        const details = await fetchFromAPI('/community-details', { communityId });
+        // Show a concise "About" section from details; raw dump as fallback
+        const name = dget(details, 'result.name') || dget(details, 'result.community.name') || 'Community';
+        const desc = dget(details, 'result.description') || dget(details, 'result.community.description') || '';
+        const members = dget(details, 'result.member_count') || dget(details, 'result.stats.member_count') || 0;
+        const html = `
+      <h3>${name}</h3>
+      ${desc ? `<p>${desc}</p>` : ''}
+      <div class="tweet-footer"><span>👥 ${members} members</span></div>
+      <pre class="json-dump">${esc(JSON.stringify(details, null, 2))}</pre>
+    `;
+        container.innerHTML = html;
+    } catch (err) {
+        console.error('Community details error:', err);
+        showError(container, 'Could not load community details.');
+    }
 });
 
 document.getElementById('get-community-tweets-btn').addEventListener('click', async () => {
@@ -979,7 +998,26 @@ async function doGetTopics(container) {
     try {
         const topicsData = await fetchFromAPI('/community-topics', {});
         const flat = flattenCommunityTopics(topicsData);
-        displayGenericResults({ topics: flat }, document.getElementById('community-topics-results') || container, 'Community Topics');
+        const holder = document.getElementById('community-topics-results') || container;
+        holder.innerHTML = `
+  <h3>Topics</h3>
+  <div id="topic-chips" style="display:flex;flex-wrap:wrap;gap:8px;"></div>`;
+        const chips = document.getElementById('topic-chips');
+        chips.innerHTML = flat.map(t =>
+          `<button class="chip" data-id="${esc(t.topic_id)}" data-name="${esc(t.topic_name)}" style="padding:6px 12px;border:1px solid #1da1f2;background:#fff;color:#1da1f2;border-radius:16px;cursor:pointer;font-size:14px;transition:all 0.2s;">#${esc(t.topic_name)} (${esc(t.topic_id)})</button>`
+        ).join('');
+        chips.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.chip');
+            if (!btn) return;
+            document.getElementById('community-search-input').value = btn.dataset.name;
+            // immediately load the timeline for this exact id
+            const container = document.getElementById('community-explore-results') || holder;
+            showLoading(container);
+            const tData = await fetchFromAPI('/explore-community-timeline', { topicId: btn.dataset.id });
+            const tweets = extractTweetsFromResponse(tData);
+            const usersIdx = buildUsersIndexDeep(tData);
+            displayTweets(tweets, container, `Community Timeline for "${btn.dataset.name}"`, { usersIndex: usersIdx });
+        });
     } catch (err) {
         console.error('Community topics error:', err);
         showError(container, err.message || 'Failed to load topics');
@@ -1116,24 +1154,55 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
 // DISPLAY FUNCTIONS
 // ====================
 
+// Build a users index from ANY payload (community/search/list/timeline/legacy)
+function buildUsersIndexDeep(json) {
+  const idx = {};
+  const push = (u) => {
+    if (!u) return;
+    const legacy = u.legacy || u;
+    const id = u.rest_id || legacy.id_str || u.id_str || u.id;
+    const handle = legacy.screen_name;
+    if (id && handle && !idx[id]) idx[id] = legacy;
+  };
+  const stack = [json];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+    // Common places
+    push(cur?.core?.user_results?.result);
+    if (cur?.globalObjects?.users) {
+      for (const u of Object.values(cur.globalObjects.users)) push(u);
+    }
+    if (Array.isArray(cur?.users)) {
+      for (const u of cur.users) push(u?.legacy || u);
+    }
+    if (cur?.result?.users) {
+      const ru = cur.result.users;
+      if (Array.isArray(ru)) for (const u of ru) push(u?.legacy || u);
+      else for (const u of Object.values(ru)) push(u);
+    }
+    for (const v of Object.values(cur)) {
+      if (v && typeof v === 'object') stack.push(v);
+    }
+  }
+  return idx;
+}
+
 function unwrapTweet(node) {
     // Accept result wrapper, legacy-only nodes, etc.
     return node?.result || node;
 }
 
 function resolveAuthorFromTweet(tweet, usersIndex = {}) {
-    const t = unwrapTweet(tweet);
-    // 1) Modern path: embedded author under core.user_results.result.legacy
-    const u1 = dget(t, 'core.user_results.result.legacy');
-    if (u1?.screen_name) return { name: u1.name || 'Unknown', username: u1.screen_name };
-    // 2) Legacy link: author id on the tweet points into usersIndex
-    const uid = dget(t, 'legacy.user_id_str') || dget(t, 'user_id_str');
-    const u2 = (uid && usersIndex[uid]) ? usersIndex[uid] : null;
-    if (u2?.screen_name) return { name: u2.name || 'Unknown', username: u2.screen_name };
-    // 3) Fallback: shallow DFS to find first object with a screen_name
-    const any = findFirst(t, o => typeof o === 'object' && o && ('screen_name' in o || 'name' in o));
-    if (any?.screen_name) return { name: any.name || 'Unknown', username: any.screen_name };
-    return { name: 'Unknown', username: 'unknown' };
+  const t = (tweet?.result || tweet);
+  const embed = dget(t, 'core.user_results.result.legacy');
+  if (embed?.screen_name) return { name: embed.name || 'Unknown', username: embed.screen_name };
+  const uid = dget(t, 'legacy.user_id_str') || dget(t, 'user_id_str');
+  const idx = uid && usersIndex[uid] ? usersIndex[uid] : null;
+  if (idx?.screen_name) return { name: idx.name || 'Unknown', username: idx.screen_name };
+  const any = findFirst(t, o => o && typeof o === 'object' && ('screen_name' in o || 'name' in o));
+  if (any?.screen_name) return { name: any.name || 'Unknown', username: any.screen_name };
+  return { name: 'Unknown', username: 'unknown' };
 }
 
 function normalizeTweetAndAuthor(t, usersIndex) {
