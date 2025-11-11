@@ -171,10 +171,31 @@
         </div>
     </div>
 
-    <!-- Optional: Load config.js for local development (file is gitignored) -->
-    <script src="config.js" onerror="console.log('No config.js found - using Cloudflare Worker proxy')"></script>
-    <!-- Optional: Load worker-config.js for production (file is gitignored) -->
-    <script src="worker-config.js" onerror="console.log('No worker-config.js found - Worker URL must be set')"></script>
-    <script src="script.js"></script>
+    <script>
+      (async () => {
+        async function loadIfExists(path) {
+          try {
+            const res = await fetch(path, { cache: 'no-store' });
+            if (res.ok) {
+              await new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = path;
+                s.onload = resolve;
+                s.onerror = reject;
+                document.head.appendChild(s);
+              });
+              console.log(`🔧 Loaded optional ${path}`);
+            }
+          } catch (_) { /* silent */ }
+        }
+        // Try production override first, then local dev config (both are optional)
+        await loadIfExists('worker-config.js');
+        await loadIfExists('config.js');
+        // Now load the main app script (sees any WORKER_URL_OVERRIDE we just loaded)
+        const app = document.createElement('script');
+        app.src = 'script.js';
+        document.head.appendChild(app);
+      })();
+    </script>
 </body>
 </html>
