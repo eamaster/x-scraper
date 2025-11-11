@@ -504,15 +504,22 @@ function extractTweetsFromResponse(data) {
     if (instructions.length > 0) {
         for (const instruction of instructions) {
             console.log(`  - Instruction type: ${instruction.type}`);
-            if (instruction.type === 'TimelineAddEntries' && instruction.entries) {
-                const entries = instruction.entries.filter(entry => 
-                    entry.content?.itemContent?.tweet_results?.result ||
-                    entry.content?.itemContent?.tweetDisplayType === 'Tweet'
+            const candEntries =
+                instruction.entries ||
+                instruction.addEntries ||
+                instruction.moduleItems ||
+                [];
+            if (Array.isArray(candEntries) && candEntries.length) {
+                const entries = candEntries.filter(e =>
+                    e?.content?.itemContent?.tweet_results?.result ||
+                    e?.content?.itemContent?.tweet_results ||
+                    e?.content?.itemContent?.tweetDisplayType === 'Tweet'
                 );
                 console.log(`  - Found ${entries.length} tweet entries`);
                 tweets.push(
                     ...entries
-                        .map(entry => entry.content?.itemContent?.tweet_results?.result || entry.content?.itemContent?.tweet_results)
+                        .map(e => e.content?.itemContent?.tweet_results?.result ||
+                                  e.content?.itemContent?.tweet_results)
                         .filter(Boolean)
                         .map(t => t.result || t)
                 );
@@ -668,6 +675,101 @@ document.getElementById('get-quotes-btn').addEventListener('click', () => getTwe
 document.getElementById('get-likes-btn').addEventListener('click', () => getTweetInteractions('likes'));
 
 // ====================
+// COMMUNITY EXTRACTORS
+// ====================
+
+function extractCommunitiesFromResponse(json) {
+  const out = [];
+
+  const pushNorm = (raw) => {
+    if (!raw) return;
+    const r = raw.community || raw.community_results?.result || raw.result || raw;
+    const id  = r.community_id || r.rest_id || r.id_str || r.id;
+    const name = r.name || r.community_name || r.display_name || r.topic || 'Community';
+    const desc = r.description || r.summary || '';
+    const members =
+      r.member_count ?? r.members_count ?? r.stats?.member_count ?? 0;
+    const avatar =
+      r.avatar?.image_url || r.avatar_image?.image_url || '';
+
+    out.push({ id, name, desc, members, avatar });
+  };
+
+  // 1) Common shapes
+  const direct = json?.result?.communities || json?.communities || json?.list;
+  if (Array.isArray(direct)) direct.forEach(pushNorm);
+
+  // 2) Timeline instructions
+  const ins = json?.result?.timeline?.instructions || [];
+  for (const i of ins) {
+    const es = i.entries || i.addEntries || i.moduleItems || [];
+    for (const e of es) {
+      const c1 = e?.content?.itemContent?.community_results?.result;
+      const c2 = e?.content?.itemContent?.community;
+      const c3 = e?.content?.community_results?.result;
+      const c4 = e?.content?.community;
+      [c1, c2, c3, c4].forEach(pushNorm);
+    }
+  }
+
+  // 3) Deep scan for obvious arrays of communities
+  if (!out.length) {
+    const stack = [json];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (cur && typeof cur === 'object') {
+        for (const v of Object.values(cur)) {
+          if (Array.isArray(v)) {
+            for (const item of v) {
+              if (item && typeof item === 'object') {
+                const looksLikeCommunity =
+                  'community_id' in item ||
+                  'community' in item ||
+                  'community_results' in item ||
+                  item?.__typename === 'Community';
+                if (looksLikeCommunity) pushNorm(item);
+              }
+            }
+          } else if (v && typeof v === 'object') {
+            stack.push(v);
+          }
+        }
+      }
+    }
+  }
+
+  // Deduplicate by id+name
+  const seen = new Set();
+  return out.filter(c => {
+    const key = `${c.id || ''}|${(c.name || '').toLowerCase()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function renderCommunities(list, container, title = 'Communities') {
+  container.innerHTML = `<h3>${title}</h3>` +
+    (list.length === 0
+      ? '<p>No communities found.</p>'
+      : list.map(c => `
+          <div class="community-card">
+            <div style="display:flex; align-items:center; gap:12px;">
+              ${c.avatar ? `<img src="${c.avatar}" alt="" width="40" height="40" style="border-radius:8px;object-fit:cover">` : ''}
+              <div>
+                <strong>${c.name || 'Community'}</strong>
+                ${c.id ? `<span class="badge badge-count">${c.id}</span>` : ''}
+              </div>
+            </div>
+            ${c.desc ? `<p style="margin-top:8px">${c.desc}</p>` : ''}
+            <div class="tweet-footer">
+              <span>👥 ${c.members ?? 0} members</span>
+            </div>
+          </div>
+        `).join(''));
+}
+
+// ====================
 // COMMUNITY TAB
 // ====================
 
@@ -678,7 +780,8 @@ document.getElementById('search-community-btn').addEventListener('click', async 
     showLoading(container);
     try {
         const data = await fetchFromAPI('/search-community', { query, count: 20 });
-        displayCommunities(data.result?.timeline || data.list || [], container, `Communities for "${query}"`);
+        const list = extractCommunitiesFromResponse(data);
+        renderCommunities(list, container, `Communities for "${query}"`);
     } catch (error) { showError(container, error.message); }
 });
 
