@@ -905,6 +905,169 @@ function renderCommunities(list, container, title = 'Communities') {
         `).join(''));
 }
 
+// ---------- LIST HELPERS (robust across shapes) ----------
+
+// Normalize a "list" object (works for multiple shapes)
+function normalizeList(node) {
+  // Common candidate fields across shapes
+  const id =
+    dget(node, 'id_str') ||
+    dget(node, 'rest_id') ||
+    dget(node, 'list_id') ||
+    dget(node, 'id') ||
+    dget(node, 'legacy.id_str') || '';
+
+  const name =
+    dget(node, 'name') ||
+    dget(node, 'legacy.name') ||
+    dget(node, 'title') ||
+    'Untitled list';
+
+  const description =
+    dget(node, 'description') ||
+    dget(node, 'legacy.description') ||
+    'No description';
+
+  const memberCount =
+    dget(node, 'member_count') ||
+    dget(node, 'members_count') ||
+    dget(node, 'legacy.member_count') ||
+    0;
+
+  const subscriberCount =
+    dget(node, 'subscriber_count') ||
+    dget(node, 'subscribers_count') ||
+    dget(node, 'legacy.subscriber_count') ||
+    0;
+
+  // Try to resolve owner
+  const owner =
+    dget(node, 'user') ||
+    dget(node, 'owner') ||
+    dget(node, 'legacy.owner') ||
+    dget(node, 'owner_results.result') || {};
+
+  const ownerLegacy = owner.legacy || owner;
+  const ownerHandle = ownerLegacy?.screen_name || '';
+  const ownerName = ownerLegacy?.name || '';
+
+  return {
+    id: String(id || '').trim(),
+    name,
+    description,
+    memberCount,
+    subscriberCount,
+    ownerHandle,
+    ownerName
+  };
+}
+
+// DFS to find list-like objects anywhere in a payload
+function extractListsFromResponse(payload) {
+  const lists = [];
+  const seen = new Set();
+  const stack = [payload];
+
+  // Direct arrays first
+  const direct = dget(payload, 'result.lists') || dget(payload, 'lists') || dget(payload, 'result.data.lists');
+  if (Array.isArray(direct)) {
+    for (const item of direct) {
+      if (item && typeof item === 'object') stack.push(item);
+    }
+  }
+
+  // Timeline instructions
+  const instructions = dget(payload, 'result.timeline.instructions') || [];
+  for (const ins of instructions) {
+    const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
+    for (const e of entries) {
+      if (e && typeof e === 'object') {
+        const listNode = dget(e, 'content.itemContent.list') || 
+                        dget(e, 'content.itemContent.list_results.result') ||
+                        dget(e, 'content.list') ||
+                        dget(e, 'list');
+        if (listNode) stack.push(listNode);
+        stack.push(e);
+      }
+    }
+  }
+
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+
+    // Candidate: object that looks like a list
+    const looksLikeList =
+      ('list' in cur) || ('list_id' in cur) || ('member_count' in cur) ||
+      cur.__typename === 'List' || 
+      (cur.entryType === 'TimelineTimelineItem' && dget(cur, 'content.itemContent.list')) ||
+      (('name' in cur) && (('member_count' in cur) || ('subscriber_count' in cur)));
+
+    if (looksLikeList) {
+      const node = cur.list || cur;
+      const norm = normalizeList(node);
+      if (norm.id && !seen.has(norm.id)) {
+        seen.add(norm.id);
+        lists.push(norm);
+      }
+    }
+
+    // Walk children
+    for (const k in cur) {
+      const v = cur[k];
+      if (Array.isArray(v)) {
+        for (const x of v) {
+          if (x && typeof x === 'object') stack.push(x);
+        }
+      } else if (v && typeof v === 'object') {
+        stack.push(v);
+      }
+    }
+  }
+
+  return lists;
+}
+
+// Render list cards and wire click -> fill list ID + enable actions
+function renderLists(container, lists, title = 'Lists') {
+  if (!lists || lists.length === 0) {
+    container.innerHTML = `<h3>${title}</h3><p>No lists found.</p>`;
+    return;
+  }
+
+  container.innerHTML = `<h3>${title}</h3>` +
+    lists.map(lst => `
+      <div class="community-card" style="cursor: pointer; margin-bottom: 10px;" data-list-id="${esc(lst.id)}">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+          <div style="flex: 1;">
+            <strong>${esc(lst.name)}</strong>
+            ${lst.id ? `<span class="badge badge-count">ID: ${esc(lst.id)}</span>` : ''}
+          </div>
+        </div>
+        <p style="margin: 8px 0; color: #65676b;">${esc(lst.description)}</p>
+        <div class="tweet-footer">
+          <span>👥 ${formatNumber(lst.memberCount || 0)} members</span>
+          <span>👀 ${formatNumber(lst.subscriberCount || 0)} subscribers</span>
+          ${lst.ownerHandle ? `<span>· by @${esc(lst.ownerHandle)}${lst.ownerName ? ` (${esc(lst.ownerName)})` : ''}</span>` : ''}
+        </div>
+      </div>
+    `).join('');
+
+  // Add click handlers to list cards
+  container.querySelectorAll('[data-list-id]').forEach(card => {
+    card.addEventListener('click', () => {
+      const listId = card.dataset.listId;
+      const input = document.getElementById('list-id-input');
+      if (input) input.value = listId;
+      // Optionally scroll to the actions section
+      const detailsBtn = document.getElementById('get-list-details-btn');
+      if (detailsBtn) {
+        detailsBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  });
+}
+
 // ====================
 // COMMUNITY TAB
 // ====================
@@ -1164,61 +1327,173 @@ async function doGetTopics(container) {
 // LISTS TAB
 // ====================
 
+// Helper to get list ID from input
+function getListId() {
+    return (document.getElementById('list-id-input')?.value || '').trim();
+}
+
+// --- Lists: search by keyword ---
 document.getElementById('search-lists-btn').addEventListener('click', async () => {
     const query = document.getElementById('list-search-input').value.trim();
     const container = document.getElementById('lists-results');
-    if (!query) { showError(container, 'Please enter a search query'); return; }
+    if (!query) { 
+        showError(container, 'Please enter a search query'); 
+        return; 
+    }
     showLoading(container);
     try {
+        console.log('🔍 Fetching: /search-lists with params:', { query });
         const data = await fetchFromAPI('/search-lists', { query });
-        displayLists(data.result?.timeline || data.lists || [], container, `Lists for "${query}"`);
-    } catch (error) { showError(container, error.message); }
+        console.log('✅ API Response:', data);
+        const lists = extractListsFromResponse(data);
+        renderLists(container, lists, `Lists for "${query}"`);
+    } catch (err) {
+        console.error('Lists search error:', err);
+        showError(container, err.message || String(err));
+    }
 });
 
+// --- List Details ---
 document.getElementById('get-list-details-btn').addEventListener('click', async () => {
-    const listId = document.getElementById('list-id-input').value.trim();
+    const listId = getListId();
     const container = document.getElementById('lists-results');
-    if (!listId) { showError(container, 'Please enter a list ID'); return; }
+    if (!listId) { 
+        showWarning(container, 'Enter a List ID or click a list above.'); 
+        return; 
+    }
     showLoading(container);
     try {
+        console.log('📄 Fetching list details for:', listId);
         const data = await fetchFromAPI('/list-details', { listId });
-        displayGenericResults(data, container, 'List Details');
-    } catch (error) { showError(container, error.message); }
+        console.log('📄 List details:', data);
+        const lists = extractListsFromResponse(data);
+        if (lists.length > 0) {
+            const L = lists[0];
+            container.innerHTML = `
+                <h3>List Details</h3>
+                <div class="community-card">
+                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                        <div style="flex: 1;">
+                            <strong>${esc(L.name)}</strong>
+                            ${L.id ? `<span class="badge badge-count">ID: ${esc(L.id)}</span>` : ''}
+                        </div>
+                    </div>
+                    <p style="margin: 8px 0; color: #65676b;">${esc(L.description)}</p>
+                    <div class="tweet-footer">
+                        <span>👥 ${formatNumber(L.memberCount || 0)} members</span>
+                        <span>👀 ${formatNumber(L.subscriberCount || 0)} subscribers</span>
+                        ${L.ownerHandle ? `<span>· by @${esc(L.ownerHandle)}${L.ownerName ? ` (${esc(L.ownerName)})` : ''}</span>` : ''}
+                    </div>
+                </div>
+            `;
+        } else {
+            showWarning(container, 'No details found for this list.');
+        }
+    } catch (error) {
+        console.error('List details error:', error);
+        showError(container, error.message || String(error));
+    }
 });
 
+// --- List Timeline ---
 document.getElementById('get-list-timeline-btn').addEventListener('click', async () => {
-    const listId = document.getElementById('list-id-input').value.trim();
+    const listId = getListId();
     const container = document.getElementById('lists-results');
-    if (!listId) { showError(container, 'Please enter a list ID first'); return; }
+    if (!listId) { 
+        showWarning(container, 'Enter a List ID or click a list above.'); 
+        return; 
+    }
     showLoading(container);
     try {
+        console.log('📜 Fetching list timeline for:', listId);
         const data = await fetchFromAPI('/list-timeline', { listId });
+        // Build users index to resolve authors
+        const usersIdx = buildUsersIndexDeep(data);
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users for list timeline`);
         const tweets = extractTweetsFromResponse(data);
-        const usersIndex = buildUsersIndex(data);
-        displayTweets(tweets, container, 'List Timeline', { usersIndex });
-    } catch (error) { showError(container, error.message); }
+        displayTweets(tweets, container, 'List Timeline', { usersIndex: usersIdx });
+    } catch (error) {
+        console.error('List timeline error:', error);
+        showError(container, error.message || String(error));
+    }
 });
 
+// --- List Members ---
 document.getElementById('get-list-members-btn').addEventListener('click', async () => {
-    const listId = document.getElementById('list-id-input').value.trim();
+    const listId = getListId();
     const container = document.getElementById('lists-results');
-    if (!listId) { showError(container, 'Please enter a list ID first'); return; }
+    if (!listId) { 
+        showWarning(container, 'Enter a List ID or click a list above.'); 
+        return; 
+    }
     showLoading(container);
     try {
+        console.log('👥 Fetching list members for:', listId);
         const data = await fetchFromAPI('/list-members', { listId, count: 20 });
-        displayUsers(data.result?.timeline || [], container, 'List Members');
-    } catch (error) { showError(container, error.message); }
+        // Extract users from timeline instructions
+        const users = [];
+        const instructions = dget(data, 'result.timeline.instructions') || [];
+        for (const ins of instructions) {
+            const entries = ins.entries || ins.addEntries || [];
+            for (const e of entries) {
+                const ur = dget(e, 'content.itemContent.user_results.result');
+                if (ur) users.push(ur);
+            }
+        }
+        // Fallback: use buildUsersIndexDeep and convert to user objects
+        if (users.length === 0) {
+            const usersIdx = buildUsersIndexDeep(data);
+            for (const [id, legacy] of Object.entries(usersIdx)) {
+                users.push({
+                    rest_id: id,
+                    legacy: legacy
+                });
+            }
+        }
+        displayUsers(users, container, 'List Members');
+    } catch (error) {
+        console.error('List members error:', error);
+        showError(container, error.message || String(error));
+    }
 });
 
+// --- List Followers ---
 document.getElementById('get-list-followers-btn').addEventListener('click', async () => {
-    const listId = document.getElementById('list-id-input').value.trim();
+    const listId = getListId();
     const container = document.getElementById('lists-results');
-    if (!listId) { showError(container, 'Please enter a list ID first'); return; }
+    if (!listId) { 
+        showWarning(container, 'Enter a List ID or click a list above.'); 
+        return; 
+    }
     showLoading(container);
     try {
+        console.log('👤 Fetching list followers for:', listId);
         const data = await fetchFromAPI('/list-followers', { listId, count: 20 });
-        displayUsers(data.result?.timeline || [], container, 'List Followers');
-    } catch (error) { showError(container, error.message); }
+        // Extract users from timeline instructions
+        const users = [];
+        const instructions = dget(data, 'result.timeline.instructions') || [];
+        for (const ins of instructions) {
+            const entries = ins.entries || ins.addEntries || [];
+            for (const e of entries) {
+                const ur = dget(e, 'content.itemContent.user_results.result');
+                if (ur) users.push(ur);
+            }
+        }
+        // Fallback: use buildUsersIndexDeep and convert to user objects
+        if (users.length === 0) {
+            const usersIdx = buildUsersIndexDeep(data);
+            for (const [id, legacy] of Object.entries(usersIdx)) {
+                users.push({
+                    rest_id: id,
+                    legacy: legacy
+                });
+            }
+        }
+        displayUsers(users, container, 'List Followers');
+    } catch (error) {
+        console.error('List followers error:', error);
+        showError(container, error.message || String(error));
+    }
 });
 
 // ====================
