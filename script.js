@@ -137,11 +137,16 @@ function normalizeUser(json) {
 
     const name = dget(u, 'name') || dget(json, 'user.name') || '';
     const username = dget(u, 'screen_name') || dget(json, 'user.screen_name') || '';
-    const description = dget(u, 'description') || '';
+    // name / handle already resolved above – extend avatar + description fallbacks:
     const avatar =
         dget(u, 'profile_image_url_https') ||
         dget(u, 'profile_image_url') ||
-        '';
+        dget(json, 'result.data.user.result.avatar.image_url') ||
+        dget(json, 'user.avatar.image_url') || '';
+    const description =
+        dget(u, 'description') ||
+        dget(json, 'result.data.user.result.legacy.description') ||
+        dget(json, 'user.description') || '';
     const verified = !!(dget(u, 'verified') || dget(u, 'is_blue_verified'));
 
     // Probe for metrics in multiple places to avoid zeros on valid users
@@ -170,6 +175,17 @@ function extractCommunityTopics(json) {
     const topics = dget(json, 'data.fetch_user_community_topics.community_topics');
     if (Array.isArray(topics)) return topics;
     throw new Error('UNEXPECTED_COMMUNITY_TOPICS');
+}
+
+function extractAutocomplete(json) {
+    const root = dget(json, 'result') || json || {};
+    return {
+        users: Array.isArray(root.users) ? root.users : [],
+        topics: Array.isArray(root.topics) ? root.topics : [],
+        lists: Array.isArray(root.lists) ? root.lists : [],
+        events: Array.isArray(root.events) ? root.events : [],
+        num: root.num_results ?? (root.users?.length || 0)
+    };
 }
 
 // ====================
@@ -237,8 +253,9 @@ function renderUserCard(user, container) {
         return;
     }
 
-    const avatar = user.avatar
-        ? user.avatar.replace('_normal', '_400x400')
+    const photo = user.avatar || user.profile_image_url_https || '';
+    const avatar = photo
+        ? photo.replace('_normal', '_400x400')
         : 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
     const metrics = user.metrics || {};
 
@@ -263,6 +280,54 @@ function renderUserCard(user, container) {
 
 function renderSearchResults(tweets, container, query, ctx = {}) {
     displayTweets(tweets, container, `Search Results for "${query}"`, ctx);
+}
+
+function renderAutocomplete(ac, container) {
+    const userRows = ac.users.map(u => {
+        const legacy = u.legacy || u;
+        const name = legacy.name || u.name || 'Unknown';
+        const handle = legacy.screen_name || u.screen_name || 'unknown';
+        const img =
+            legacy.profile_image_url_https ||
+            legacy.profile_image_url ||
+            u.avatar?.image_url || '';
+        return `
+      <div class="suggestion-row">
+        ${img ? `<img class="suggestion-avatar" src="${img}" alt="@${handle}">` : ''}
+        <div class="suggestion-meta">
+          <div class="suggestion-name">${name}</div>
+          <div class="suggestion-handle">@${handle}</div>
+        </div>
+      </div>`;
+    }).join('');
+    const topicRows = ac.topics.map(t => `
+    <div class="suggestion-row">
+      <div class="suggestion-meta">
+        <div class="suggestion-name">#${t.topic_name || t.name || t.query || 'Topic'}</div>
+        <div class="suggestion-handle">id: ${t.topic_id || t.id || ''}</div>
+      </div>
+    </div>`).join('');
+    const listRows = ac.lists.map(l => `
+    <div class="suggestion-row">
+      <div class="suggestion-meta">
+        <div class="suggestion-name">${l.name || 'List'}</div>
+        <div class="suggestion-handle">id: ${l.id_str || l.id || ''}</div>
+      </div>
+    </div>`).join('');
+    const eventRows = ac.events.map(e => `
+    <div class="suggestion-row">
+      <div class="suggestion-meta">
+        <div class="suggestion-name">${e.name || 'Event'}</div>
+      </div>
+    </div>`).join('');
+    const nothing = !ac.users.length && !ac.topics.length && !ac.lists.length && !ac.events.length;
+    container.innerHTML = `
+    <h3>Autocomplete suggestions...</h3>
+    ${nothing ? '<p>No suggestions.</p>' : ''}
+    ${userRows ? `<h4>Users</h4>${userRows}` : ''}
+    ${topicRows ? `<h4>Topics</h4>${topicRows}` : ''}
+    ${listRows ? `<h4>Lists</h4>${listRows}` : ''}
+    ${eventRows ? `<h4>Events</h4>${eventRows}` : ''}`;
 }
 
 function renderCommunityTopics(topics, container) {
@@ -323,18 +388,18 @@ document.getElementById('search-btn').addEventListener('click', async () => {
 });
 
 document.getElementById('autocomplete-btn').addEventListener('click', async () => {
-    const value = document.getElementById('autocomplete-input').value.trim();
+    const q = (document.getElementById('autocomplete-input')?.value || '').trim();
     const container = document.getElementById('search-results');
-    if (!value) { showError(container, 'Please enter text'); return; }
+    if (!q) { showWarning(container, 'Type a query (e.g., elonmusk, spacex)'); return; }
     showLoading(container);
     try {
-        const data = await fetchFromAPI('/autocomplete', { value });
-        const suggestions = data.users || [];
-        if (suggestions.length === 0) { container.innerHTML = '<p>No suggestions found</p>'; return; }
-        container.innerHTML = `<h3>Autocomplete Suggestions</h3>${suggestions.map(user => `
-            <div class="user-card"><strong>@${user.screen_name}</strong> - ${user.name}
-            ${user.verified ? '<span class="badge badge-verified">✓</span>' : ''}</div>`).join('')}`;
-    } catch (error) { showError(container, error.message); }
+        const data = await fetchFromAPI('/autocomplete', { value: q });
+        const ac = extractAutocomplete(data);
+        renderAutocomplete(ac, container);
+    } catch (err) {
+        console.error('Autocomplete error:', err);
+        showError(container, 'Could not load suggestions.');
+    }
 });
 
 // ====================
