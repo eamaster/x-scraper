@@ -282,52 +282,78 @@ function renderSearchResults(tweets, container, query, ctx = {}) {
     displayTweets(tweets, container, `Search Results for "${query}"`, ctx);
 }
 
-function renderAutocomplete(ac, container) {
-    const userRows = ac.users.map(u => {
-        const legacy = u.legacy || u;
-        const name = legacy.name || u.name || 'Unknown';
-        const handle = legacy.screen_name || u.screen_name || 'unknown';
-        const img =
-            legacy.profile_image_url_https ||
-            legacy.profile_image_url ||
-            u.avatar?.image_url || '';
-        return `
-      <div class="suggestion-row">
-        ${img ? `<img class="suggestion-avatar" src="${img}" alt="@${handle}">` : ''}
-        <div class="suggestion-meta">
-          <div class="suggestion-name">${name}</div>
-          <div class="suggestion-handle">@${handle}</div>
-        </div>
-      </div>`;
-    }).join('');
-    const topicRows = ac.topics.map(t => `
-    <div class="suggestion-row">
-      <div class="suggestion-meta">
-        <div class="suggestion-name">#${t.topic_name || t.name || t.query || 'Topic'}</div>
-        <div class="suggestion-handle">id: ${t.topic_id || t.id || ''}</div>
-      </div>
-    </div>`).join('');
-    const listRows = ac.lists.map(l => `
-    <div class="suggestion-row">
-      <div class="suggestion-meta">
-        <div class="suggestion-name">${l.name || 'List'}</div>
-        <div class="suggestion-handle">id: ${l.id_str || l.id || ''}</div>
-      </div>
-    </div>`).join('');
-    const eventRows = ac.events.map(e => `
-    <div class="suggestion-row">
-      <div class="suggestion-meta">
-        <div class="suggestion-name">${e.name || 'Event'}</div>
-      </div>
-    </div>`).join('');
-    const nothing = !ac.users.length && !ac.topics.length && !ac.lists.length && !ac.events.length;
-    container.innerHTML = `
+function esc(s){return (s??'').toString().replace(/[&<>"']/g,m=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));}
+
+// For autocomplete users
+function normalizeUserLite(u){
+  const L = u?.legacy || u || {};
+  return {
+    name: L.name || u?.name || 'Unknown',
+    handle: L.screen_name || u?.screen_name || 'unknown',
+    avatar: L.profile_image_url_https || L.profile_image_url || u?.avatar?.image_url || ''
+  };
+}
+
+// For autocomplete topics (shapes vary)
+function topicMeta(t){
+  const n = t?.topic || t || {};
+  const name = n.topic_name || n.name || n.query || n.display_name || 'Topic';
+  const id   = n.topic_id   || n.id_str || n.id || '';
+  return { name, id };
+}
+
+function renderAutocomplete(ac, container){
+  // Deduplicate users by handle (lowercased)
+  const seen = new Set();
+  const users = [];
+  for (const u of (ac.users || [])){
+    const nu = normalizeUserLite(u);
+    const key = nu.handle.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    users.push(nu);
+  }
+  // Normalize topics/lists/events
+  const topics = (ac.topics || []).map(topicMeta).filter(t => t.name);
+  const lists  = (ac.lists  || []).map(l => ({ name: l.name || 'List', id: l.id_str || l.id || '' }));
+  const events = (ac.events || []).map(e => ({ name: e.name || 'Event' }));
+  // Build rows
+  const userRows = users.map(u => `
+    <li class="sug-item">
+      ${u.avatar ? `<img class="suggestion-avatar" src="${esc(u.avatar)}" alt="@${esc(u.handle)}">` : ''}
+      <span class="sug-name">${esc(u.name)}</span>
+      <span class="sug-handle">@${esc(u.handle)}</span>
+    </li>
+  `).join('');
+  const topicRows = topics.map(t => `
+    <li class="sug-item">
+      <span class="sug-name">#${esc(t.name)}</span>
+      ${t.id ? `<span class="sug-id">(${esc(t.id)})</span>` : ''}
+    </li>
+  `).join('');
+  const listRows = lists.map(l => `
+    <li class="sug-item">
+      <span class="sug-name">${esc(l.name)}</span>
+      ${l.id ? `<span class="sug-id">(${esc(l.id)})</span>` : ''}
+    </li>
+  `).join('');
+  const eventRows = events.map(e => `
+    <li class="sug-item">
+      <span class="sug-name">${esc(e.name)}</span>
+    </li>
+  `).join('');
+  const hasUsers  = users.length  > 0;
+  const hasTopics = topics.length > 0;
+  const hasLists  = lists.length  > 0;
+  const hasEvents = events.length > 0;
+  container.innerHTML = `
     <h3>Autocomplete suggestions...</h3>
-    ${nothing ? '<p>No suggestions.</p>' : ''}
-    ${userRows ? `<h4>Users</h4>${userRows}` : ''}
-    ${topicRows ? `<h4>Topics</h4>${topicRows}` : ''}
-    ${listRows ? `<h4>Lists</h4>${listRows}` : ''}
-    ${eventRows ? `<h4>Events</h4>${eventRows}` : ''}`;
+    ${!(hasUsers||hasTopics||hasLists||hasEvents) ? '<p>No suggestions.</p>' : ''}
+    ${hasUsers  ? `<h4>Users</h4><ul class="suggestions">${userRows}</ul>` : ''}
+    ${hasTopics ? `<h4>Topics</h4><ul class="suggestions">${topicRows}</ul>` : ''}
+    ${hasLists  ? `<h4>Lists</h4><ul class="suggestions">${listRows}</ul>` : ''}
+    ${hasEvents ? `<h4>Events</h4><ul class="suggestions">${eventRows}</ul>` : ''}
+  `;
 }
 
 function renderCommunityTopics(topics, container) {
