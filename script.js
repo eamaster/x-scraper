@@ -211,15 +211,64 @@ function extractCommunityTopics(json) {
     throw new Error('UNEXPECTED_COMMUNITY_TOPICS');
 }
 
+// Normalize /autocomplete payload -> { users:[], topics:[], lists:[], events:[] }
 function extractAutocomplete(json) {
-    const root = dget(json, 'result') || json || {};
-    return {
-        users: Array.isArray(root.users) ? root.users : [],
-        topics: Array.isArray(root.topics) ? root.topics : [],
-        lists: Array.isArray(root.lists) ? root.lists : [],
-        events: Array.isArray(root.events) ? root.events : [],
-        num: root.num_results ?? (root.users?.length || 0)
-    };
+  // payload can be under result.* or at root
+  const root = json?.result ?? json ?? {};
+  
+  // --- USERS (existing behavior) ---
+  const users = []
+  ;(root.users || root.result?.users || []).forEach(u => {
+    const legacy = u.legacy || u;
+    const name = legacy.name || u.name;
+    const handle = legacy.screen_name || u.screen_name;
+    const avatar =
+      u.avatar?.image_url ||
+      legacy.profile_image_url_https ||
+      legacy.profile_image_url ||
+      null;
+    if (name || handle) {
+      users.push({ name, handle, avatar });
+    }
+  });
+  
+  // --- TOPICS (fix) ---
+  const topicsRaw = root.topics || root.result?.topics || [];
+  const topics = topicsRaw
+    .map(t => {
+      // accept many shapes
+      const name =
+        t.name ||
+        t.topic_name ||
+        t.display_name ||
+        t?.topic?.name ||
+        t?.topic?.topic_name ||
+        t?.topic_data?.name ||
+        t?.topic_data?.topic_name ||
+        '';
+      const id =
+        t.id ||
+        t.topic_id ||
+        t?.topic?.id ||
+        t?.topic?.topic_id ||
+        t?.topic_data?.id ||
+        t?.topic_data?.topic_id ||
+        '';
+      return { name: (name || '').toString().trim(), id: (id || '').toString().trim() };
+    })
+    .filter(t => t.name.length > 0); // render only valid topics
+  
+  // --- LISTS / EVENTS (pass-through best-effort) ---
+  const lists = root.lists || root.result?.lists || [];
+  const events = root.events || root.result?.events || [];
+  
+  // Debug if provider changed shape again
+  if ((root.topics || root.result?.topics) && topics.length === 0) {
+    const sample = (root.topics || root.result?.topics || [])[0];
+    console.warn('⚠️ Autocomplete topics had no names. Sample keys:', sample && Object.keys(sample));
+  }
+  
+  return { users, topics, lists, events };
 }
 
 // ====================
@@ -351,64 +400,58 @@ function topicMeta(raw){
   return { name, id };
 }
 
-function renderAutocomplete(ac, container){
-  // ---- Users: dedupe by handle (case-insensitive)
-  const seenUsers = new Set();
-  const users = [];
-  for (const u of (ac.users || [])){
-    const L = u?.legacy || u || {};
-    const name = L.name || u?.name || 'Unknown';
-    const handle = (L.screen_name || u?.screen_name || '').toLowerCase();
-    if (!handle || seenUsers.has(handle)) continue;
-    seenUsers.add(handle);
-    const avatar = L.profile_image_url_https || L.profile_image_url || u?.avatar?.image_url || '';
-    users.push({ name, handle, avatar });
+function renderAutocomplete(data, container){
+  // data is already normalized by extractAutocomplete
+  const sections = [];
+  
+  if (data.users?.length) {
+    sections.push(
+      `<h4>Users</h4>` +
+      data.users.map(u => `
+      <div class="ac-item">
+        ${u.avatar ? `<img src="${esc(u.avatar)}" width="24" height="24" style="border-radius:4px;object-fit:cover;margin-right:8px">` : ''}
+        <strong>${esc(u.name || '')}</strong>
+        ${u.handle ? ` <span style="opacity:.7">(@${esc(u.handle)})</span>` : ''}
+      </div>
+    `).join('')
+    );
   }
-  // ---- Topics: normalize + dedupe by name+id
-  const seenTopics = new Set();
-  const topics = [];
-  for (const raw of (ac.topics || [])){
-    const t = topicMeta(raw);
-    const key = `${(t.name||'').toLowerCase()}|${t.id||''}`;
-    if (!t.name || seenTopics.has(key)) continue;
-    seenTopics.add(key);
-    topics.push(t);
+  
+  if (data.topics?.length) {
+    sections.push(
+      `<h4>Topics</h4>` +
+      data.topics.map(t => `
+      <div class="ac-item">
+        #${esc(t.name)}${t.id ? ` <span style="opacity:.6">(id: ${esc(t.id)})</span>` : ''}
+      </div>
+    `).join('')
+    );
   }
-  // Lists & events (optional)
-  const lists  = (ac.lists  || []).map(l => ({ name: l.name || 'List', id: l.id_str || l.id || '' }));
-  const events = (ac.events || []).map(e => ({ name: e.name || 'Event' }));
-  // ---- Build rows (single-line per item)
-  const userRows = users.map(u => `
-    <li class="sug-item">
-      ${u.avatar ? `<img class="suggestion-avatar" src="${esc(u.avatar)}" alt="">` : ''}
-      <span class="sug-name">${esc(u.name)}</span>
-      <span class="sug-handle">(@${esc(u.handle)})</span>
-    </li>`).join('');
-  const topicRows = topics.map(t => `
-    <li class="sug-item">
-      <span class="sug-name">#${esc(t.name)}</span>
-      ${t.id ? `<span class="sug-id">(${esc(t.id)})</span>` : ''}
-    </li>`).join('');
-  const listRows = (lists||[]).map(l => `
-    <li class="sug-item">
-      <span class="sug-name">${esc(l.name)}</span>
-      ${l.id ? `<span class="sug-id">(${esc(l.id)})</span>` : ''}
-    </li>`).join('');
-  const eventRows = (events||[]).map(e => `
-    <li class="sug-item">
-      <span class="sug-name">${esc(e.name)}</span>
-    </li>`).join('');
-  const hasUsers  = users.length  > 0;
-  const hasTopics = topics.length > 0;
-  const hasLists  = lists.length  > 0;
-  const hasEvents = events.length > 0;
-  container.innerHTML = `
-    <h3>Autocomplete suggestions...</h3>
-    ${!(hasUsers||hasTopics||hasLists||hasEvents) ? '<p>No suggestions.</p>' : ''}
-    ${hasUsers  ? `<h4>Users</h4><ul class="suggestions">${userRows}</ul>`   : ''}
-    ${hasTopics ? `<h4>Topics</h4><ul class="suggestions">${topicRows}</ul>` : ''}
-    ${hasLists  ? `<h4>Lists</h4><ul class="suggestions">${listRows}</ul>`   : ''}
-    ${hasEvents ? `<h4>Events</h4><ul class="suggestions">${eventRows}</ul>` : ''}`;
+  
+  // Lists & events (optional - keep if present)
+  if (data.lists?.length) {
+    sections.push(
+      `<h4>Lists</h4>` +
+      data.lists.map(l => `
+      <div class="ac-item">
+        ${esc(l.name || 'List')}${l.id_str || l.id ? ` <span style="opacity:.6">(id: ${esc(l.id_str || l.id)})</span>` : ''}
+      </div>
+    `).join('')
+    );
+  }
+  
+  if (data.events?.length) {
+    sections.push(
+      `<h4>Events</h4>` +
+      data.events.map(e => `
+      <div class="ac-item">
+        ${esc(e.name || 'Event')}
+      </div>
+    `).join('')
+    );
+  }
+  
+  container.innerHTML = sections.length ? `<h3>Autocomplete suggestions...</h3>${sections.join('')}` : `<h3>Autocomplete suggestions...</h3><p>No suggestions.</p>`;
 }
 
 function renderCommunityTopics(topics, container) {
