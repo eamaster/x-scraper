@@ -491,6 +491,32 @@ async function getUserContent(type) {
     } catch (error) { showError(container, error.message); }
 }
 
+// DFS fallback to find tweets in any nesting
+function deepFindTweets(obj, acc){
+  if (!obj || typeof obj !== 'object') return;
+  
+  // Accept modern nodes or legacy with full_text
+  const isTweet = (o) =>
+    (o.__typename === 'Tweet') ||
+    (o.legacy && (o.legacy.full_text || o.legacy.created_at));
+  
+  if (isTweet(obj)) { acc.push(obj); return; }
+  
+  // Unwrap common wrappers
+  const node = obj.result || obj.tweet || obj.tweet_results?.result || obj.item || obj;
+  if (node && node !== obj && typeof node === 'object' && node !== null){
+    if (isTweet(node)) { acc.push(node); return; }
+  }
+  
+  for (const v of Object.values(obj)){
+    if (Array.isArray(v)) {
+      for (const it of v) deepFindTweets(it, acc);
+    } else if (v && typeof v === 'object') {
+      deepFindTweets(v, acc);
+    }
+  }
+}
+
 // Universal tweet extractor that handles multiple API response structures
 function extractTweetsFromResponse(data) {
     let tweets = [];
@@ -561,6 +587,16 @@ function extractTweetsFromResponse(data) {
                 }
             }
         }
+    }
+    
+    // Fallback: DFS scan to catch tweets in unusual shapes
+    if (tweets.length === 0){
+        console.log('🔍 Using DFS fallback to find tweets...');
+        const acc = [];
+        deepFindTweets(data?.result || data, acc);
+        // Normalize to consistent node shape
+        tweets.push(...acc.map(t => t.result || t));
+        console.log(`  - Found ${tweets.length} tweets via DFS`);
     }
     
     const filtered = tweets.filter(t => t);
@@ -678,6 +714,29 @@ document.getElementById('get-likes-btn').addEventListener('click', () => getTwee
 // COMMUNITY EXTRACTORS
 // ====================
 
+// Flatten the /community-topics payload into [{topic_id, topic_name}]
+function flattenCommunityTopics(json){
+  const out = [];
+  const groups = (json?.data?.fetch_user_community_topics?.community_topics) || [];
+  for (const g of groups){
+    if (g.topic_id && g.topic_name) out.push({ topic_id: String(g.topic_id), topic_name: g.topic_name });
+    for (const s of (g.subtopics || [])){
+      if (s.topic_id && s.topic_name) out.push({ topic_id: String(s.topic_id), topic_name: s.topic_name });
+    }
+  }
+  return out;
+}
+
+// Pick topic ids that match the user's keyword (case-insensitive substring)
+function resolveTopicIds(keyword, topics){
+  const q = (keyword || '').trim().toLowerCase();
+  if (!q) return [];
+  const hits = topics.filter(t => (t.topic_name || '').toLowerCase().includes(q)).map(t => t.topic_id);
+  // Special: if user typed "football" and no direct hit, prefer American Football (2) and Soccer (4)
+  if (!hits.length && q.includes('football')) return ['2', '4'];
+  return Array.from(new Set(hits));
+}
+
 function extractCommunitiesFromResponse(json) {
   const out = [];
 
@@ -774,15 +833,17 @@ function renderCommunities(list, container, title = 'Communities') {
 // ====================
 
 document.getElementById('search-community-btn').addEventListener('click', async () => {
-    const query = document.getElementById('community-search-input').value.trim();
+    const kw = (document.getElementById('community-search-input')?.value || '').trim();
     const container = document.getElementById('community-results');
-    if (!query) { showError(container, 'Please enter a search query'); return; }
     showLoading(container);
     try {
-        const data = await fetchFromAPI('/search-community', { query, count: 20 });
+        const data = await fetchFromAPI('/search-community', { query: kw, count: 20 });
         const list = extractCommunitiesFromResponse(data);
-        renderCommunities(list, container, `Communities for "${query}"`);
-    } catch (error) { showError(container, error.message); }
+        renderCommunities(list, container, `Communities for "${kw}"`);
+    } catch (err) {
+        console.error('Community search error:', err);
+        showError(container, 'Could not load communities.');
+    }
 });
 
 document.getElementById('get-community-topics-btn').addEventListener('click', async () => {
@@ -792,14 +853,38 @@ document.getElementById('get-community-topics-btn').addEventListener('click', as
 });
 
 document.getElementById('explore-community-timeline-btn').addEventListener('click', async () => {
-    const container = document.getElementById('community-results');
+    const kw = (document.getElementById('community-search-input')?.value || '').trim();
+    const container = document.getElementById('community-explore-results') || document.getElementById('community-results');
     showLoading(container);
     try {
-        const data = await fetchFromAPI('/explore-community-timeline', {});
-        const tweets = extractTweetsFromResponse(data);
-        const usersIndex = buildUsersIndex(data);
-        displayTweets(tweets, container, 'Community Timeline', { usersIndex });
-    } catch (error) { showError(container, error.message); }
+        // Fetch all topics then resolve ids from the keyword
+        const topicsData = await fetchFromAPI('/community-topics', {});
+        const topics = flattenCommunityTopics(topicsData);
+        const ids = resolveTopicIds(kw, topics);
+        if (!ids.length){
+            showWarning(container, `No matching topics for "${kw}". Try "soccer", "american football", "technology"…`);
+            return;
+        }
+        // Fetch timelines for each id and merge
+        const allTweets = [];
+        for (const id of ids){
+            const tData = await fetchFromAPI('/explore-community-timeline', { topicId: id });
+            const ts = extractTweetsFromResponse(tData);
+            allTweets.push(...ts);
+        }
+        // Dedupe by tweet id if present
+        const seen = new Set();
+        const unique = allTweets.filter(t => {
+            const id = t?.rest_id || t?.legacy?.id_str || t?.id_str || t?.id;
+            if (!id) return true;
+            if (seen.has(id)) return false;
+            seen.add(id); return true;
+        });
+        displayTweets(unique, container, `Community Timeline for "${kw}"`);
+    } catch (err) {
+        console.error('Explore community timeline error:', err);
+        showError(container, 'Could not load community timeline.');
+    }
 });
 
 document.getElementById('get-community-details-btn').addEventListener('click', async () => {
@@ -892,9 +977,9 @@ async function doExplore(query, type = 'Top', count = 20, container) {
 
 async function doGetTopics(container) {
     try {
-        const data = await fetchFromAPI('/community-topics', {});
-        const topics = extractCommunityTopics(data);
-        renderCommunityTopics(topics, container);
+        const topicsData = await fetchFromAPI('/community-topics', {});
+        const flat = flattenCommunityTopics(topicsData);
+        displayGenericResults({ topics: flat }, document.getElementById('community-topics-results') || container, 'Community Topics');
     } catch (err) {
         console.error('Community topics error:', err);
         showError(container, err.message || 'Failed to load topics');
