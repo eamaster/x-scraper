@@ -866,10 +866,32 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
         const mergeIdx = (src) => { for (const [k,v] of Object.entries(src || {})) if (!usersIdx[k]) usersIdx[k] = v; };
         for (const id of ids) {
             const tData = await fetchFromAPI('/explore-community-timeline', { topicId: id });
-            mergeIdx(buildUsersIndexDeep(tData));
+            const idx = buildUsersIndexDeep(tData);
+            console.log(`👥 Built users index with ${Object.keys(idx).length} users for topic ${id}`);
+            mergeIdx(idx);
             const ts = extractTweetsFromResponse(tData);
+            // Also extract users from the tweets themselves (in case they're embedded)
+            for (const tweet of ts) {
+                const user = dget(tweet, 'core.user_results.result');
+                if (user) {
+                    const legacy = user.legacy || user;
+                    const uid = user.rest_id || legacy.id_str || user.id_str || user.id;
+                    const uidStr = uid ? String(uid) : null;
+                    if (uidStr && legacy.screen_name) {
+                        if (!usersIdx[uidStr]) {
+                            usersIdx[uidStr] = legacy;
+                            // Also store with numeric key if applicable
+                            const uidNum = Number(uidStr);
+                            if (!isNaN(uidNum) && uidNum.toString() === uidStr && !usersIdx[uidNum]) {
+                                usersIdx[uidNum] = legacy;
+                            }
+                        }
+                    }
+                }
+            }
             allTweets.push(...ts);
         }
+        console.log(`👥 Total users in merged index: ${Object.keys(usersIdx).length}`);
         // dedupe tweets by id
         const seen = new Set();
         const unique = allTweets.filter(t => {
@@ -1162,17 +1184,53 @@ function buildUsersIndexDeep(json) {
     const legacy = u.legacy || u;
     const id = u.rest_id || legacy.id_str || u.id_str || u.id;
     const handle = legacy.screen_name;
-    if (id && handle && !idx[id]) idx[id] = legacy;
+    // Normalize ID to string for consistent lookups
+    const idStr = id ? String(id) : null;
+    if (idStr && handle && !idx[idStr]) {
+      idx[idStr] = legacy;
+      // Also store with numeric key if it's a number (for backwards compatibility)
+      const idNum = Number(idStr);
+      if (!isNaN(idNum) && idNum.toString() === idStr && !idx[idNum]) {
+        idx[idNum] = legacy;
+      }
+    }
   };
+  
+  // First, try timeline instructions (most reliable for community timelines)
+  const instructions = dget(json, 'result.timeline.instructions') || [];
+  for (const ins of instructions) {
+    const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
+    for (const e of entries) {
+      // Check for users embedded in tweet results - try multiple paths
+      const u1 = dget(e, 'content.itemContent.tweet_results.result.core.user_results.result');
+      const u2 = dget(e, 'content.itemContent.tweet_results.core.user_results.result');
+      const u3 = dget(e, 'content.itemContent.tweet_results.result.core.user_results.result.legacy');
+      if (u1) push(u1);
+      if (u2 && u2 !== u1) push(u2);
+      if (u3 && u3 !== u1 && u3 !== u2) push(u3);
+      // Also check for direct user results
+      const ur = dget(e, 'content.itemContent.user_results.result');
+      if (ur) push(ur);
+    }
+  }
+  
+  // Legacy/alt: globalObjects.users
+  const go = dget(json, 'globalObjects.users');
+  if (go) {
+    for (const [id, u] of Object.entries(go)) {
+      push(u);
+    }
+  }
+  
+  // DFS fallback to catch users in any nesting
   const stack = [json];
+  const visited = new WeakSet();
   while (stack.length) {
     const cur = stack.pop();
-    if (!cur || typeof cur !== 'object') continue;
+    if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
+    if (cur !== json) visited.add(cur);
     // Common places
     push(cur?.core?.user_results?.result);
-    if (cur?.globalObjects?.users) {
-      for (const u of Object.values(cur.globalObjects.users)) push(u);
-    }
     if (Array.isArray(cur?.users)) {
       for (const u of cur.users) push(u?.legacy || u);
     }
@@ -1182,7 +1240,7 @@ function buildUsersIndexDeep(json) {
       else for (const u of Object.values(ru)) push(u);
     }
     for (const v of Object.values(cur)) {
-      if (v && typeof v === 'object') stack.push(v);
+      if (v && typeof v === 'object' && !visited.has(v)) stack.push(v);
     }
   }
   return idx;
@@ -1195,13 +1253,25 @@ function unwrapTweet(node) {
 
 function resolveAuthorFromTweet(tweet, usersIndex = {}) {
   const t = (tweet?.result || tweet);
+  // First check: embedded user in tweet
   const embed = dget(t, 'core.user_results.result.legacy');
   if (embed?.screen_name) return { name: embed.name || 'Unknown', username: embed.screen_name };
-  const uid = dget(t, 'legacy.user_id_str') || dget(t, 'user_id_str');
-  const idx = uid && usersIndex[uid] ? usersIndex[uid] : null;
-  if (idx?.screen_name) return { name: idx.name || 'Unknown', username: idx.screen_name };
+  
+  // Second check: look up by user_id_str from usersIndex
+  const uid = dget(t, 'legacy.user_id_str') || dget(t, 'user_id_str') || dget(t, 'legacy.user_id') || dget(t, 'user_id');
+  if (uid) {
+    const uidStr = String(uid);
+    // Try string key first, then numeric
+    const idx = usersIndex[uidStr] || usersIndex[uid] || usersIndex[Number(uidStr)];
+    if (idx?.screen_name) {
+      return { name: idx.name || 'Unknown', username: idx.screen_name };
+    }
+  }
+  
+  // Third check: DFS fallback to find any screen_name in the tweet object
   const any = findFirst(t, o => o && typeof o === 'object' && ('screen_name' in o || 'name' in o));
   if (any?.screen_name) return { name: any.name || 'Unknown', username: any.screen_name };
+  
   return { name: 'Unknown', username: 'unknown' };
 }
 
