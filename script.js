@@ -913,54 +913,90 @@ function normalizeList(node) {
     return { id: '', name: 'Untitled list', description: 'No description', memberCount: 0, subscriberCount: 0, ownerHandle: '', ownerName: '' };
   }
 
-  // Common candidate fields across shapes - try multiple paths
-  const id =
-    node.id_str ||
-    node.rest_id ||
-    node.list_id ||
-    node.id ||
-    node.legacy?.id_str ||
-    node.legacy?.id ||
-    dget(node, 'id_str') ||
-    dget(node, 'rest_id') ||
-    dget(node, 'list_id') ||
-    dget(node, 'id') ||
-    dget(node, 'legacy.id_str') ||
-    String(node.id || '').trim() ||
-    '';
+  // Extract ID - check object_id first (common in search-lists response)
+  let id = '';
+  if (node.object_id) {
+    id = String(node.object_id).trim();
+  } else if (node.url && typeof node.url === 'string') {
+    // Extract ID from URL like "twitter.com/i/lists/76314257"
+    const match = node.url.match(/lists\/(\d+)/);
+    if (match) id = match[1];
+  }
+  
+  // Fallback to other ID fields
+  if (!id) {
+    id =
+      node.id_str ||
+      node.rest_id ||
+      node.list_id ||
+      node.id ||
+      node.legacy?.id_str ||
+      node.legacy?.id ||
+      dget(node, 'id_str') ||
+      dget(node, 'rest_id') ||
+      dget(node, 'list_id') ||
+      dget(node, 'id') ||
+      dget(node, 'legacy.id_str') ||
+      String(node.id || '').trim() ||
+      '';
+  }
 
-  const name =
-    node.name ||
-    node.title ||
-    node.legacy?.name ||
-    node.legacy?.title ||
-    dget(node, 'name') ||
-    dget(node, 'title') ||
-    dget(node, 'legacy.name') ||
-    dget(node, 'legacy.title') ||
-    'Untitled list';
+  // Extract name - check topic first (common in search-lists response)
+  let name = '';
+  if (node.topic && typeof node.topic === 'string') {
+    name = node.topic;
+  } else {
+    name =
+      node.name ||
+      node.title ||
+      node.legacy?.name ||
+      node.legacy?.title ||
+      dget(node, 'name') ||
+      dget(node, 'title') ||
+      dget(node, 'legacy.name') ||
+      dget(node, 'legacy.title') ||
+      '';
+  }
 
-  const description =
-    node.description ||
-    node.summary ||
-    node.legacy?.description ||
-    node.legacy?.summary ||
-    dget(node, 'description') ||
-    dget(node, 'summary') ||
-    dget(node, 'legacy.description') ||
-    dget(node, 'legacy.summary') ||
-    'No description';
+  // Extract description from result_contexts or other fields
+  let description = '';
+  if (node.result_contexts && Array.isArray(node.result_contexts) && node.result_contexts.length > 0) {
+    // result_contexts might contain description
+    const context = node.result_contexts[0];
+    description = context.description || context.text || context.summary || '';
+  }
+  
+  if (!description) {
+    description =
+      node.description ||
+      node.summary ||
+      node.legacy?.description ||
+      node.legacy?.summary ||
+      dget(node, 'description') ||
+      dget(node, 'summary') ||
+      dget(node, 'legacy.description') ||
+      dget(node, 'legacy.summary') ||
+      '';
+  }
 
-  const memberCount =
-    node.member_count ||
-    node.members_count ||
-    node.legacy?.member_count ||
-    node.legacy?.members_count ||
-    dget(node, 'member_count') ||
-    dget(node, 'members_count') ||
-    dget(node, 'legacy.member_count') ||
-    dget(node, 'legacy.members_count') ||
-    0;
+  // Extract member count from facepile_urls length or other fields
+  let memberCount = 0;
+  if (node.facepile_urls && Array.isArray(node.facepile_urls)) {
+    memberCount = node.facepile_urls.length;
+  }
+  
+  if (!memberCount) {
+    memberCount =
+      node.member_count ||
+      node.members_count ||
+      node.legacy?.member_count ||
+      node.legacy?.members_count ||
+      dget(node, 'member_count') ||
+      dget(node, 'members_count') ||
+      dget(node, 'legacy.member_count') ||
+      dget(node, 'legacy.members_count') ||
+      0;
+  }
 
   const subscriberCount =
     node.subscriber_count ||
