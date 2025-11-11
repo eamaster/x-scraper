@@ -25,6 +25,40 @@ const WORKER_URL = resolveWorkerURL();
 // ---- helpers ----
 function dget(o, p) { if (!o || !p) return; return p.replace(/\[(\d+)\]/g, '.$1').split('.').reduce((x,k)=> x && k in x ? x[k] : undefined, o); }
 
+// ---- community selection ----
+let selectedCommunity = null;
+
+function setSelectedCommunity(c){
+  if (!c) return;
+  selectedCommunity = {
+    id: c.id || c.rest_id || c.community_id,
+    name: c.name || c.community_name || c.display_name || 'Community'
+  };
+  const idInput = document.getElementById('community-id-input');
+  if (idInput) idInput.value = selectedCommunity.id || '';
+  const pill = document.getElementById('selected-community-pill');
+  if (pill){
+    pill.textContent = `${selectedCommunity.name} (${selectedCommunity.id || 'id?'})`;
+    pill.style.display = 'inline-block';
+  }
+}
+
+async function getCommunityIdOrResolve(){
+  // 1) If user has selected a community, use it
+  if (selectedCommunity?.id) return selectedCommunity.id;
+  // 2) If there's an ID typed, use it
+  const typed = (document.getElementById('community-id-input')?.value || '').trim();
+  if (typed) return typed;
+  // 3) Resolve from the keyword search automatically (pick best match)
+  const kw = (document.getElementById('community-search-input')?.value || '').trim();
+  const q = kw || 'football';
+  const searchData = await fetchFromAPI('/search-community', { query: q, count: 20 });
+  const list = extractCommunitiesFromResponse(searchData);
+  if (!list.length) return null;
+  setSelectedCommunity(list[0]);
+  return selectedCommunity.id || null;
+}
+
 // Build a users index from modern search/list/community timelines and legacy globalObjects
 function buildUsersIndex(json) {
   const idx = {};
@@ -832,14 +866,47 @@ function renderCommunities(list, container, title = 'Communities') {
 // COMMUNITY TAB
 // ====================
 
+// Event handler for community selection (defined outside to allow proper listener management)
+function handleCommunitySelectClick(e) {
+    const btn = e.target.closest('.select-community-btn');
+    if (!btn) return;
+    setSelectedCommunity({
+        id: btn.dataset.communityId,
+        name: btn.dataset.communityName
+    });
+}
+
 document.getElementById('search-community-btn').addEventListener('click', async () => {
     const kw = (document.getElementById('community-search-input')?.value || '').trim();
-    const container = document.getElementById('community-results');
+    const container = document.getElementById('community-search-results');
     showLoading(container);
     try {
         const data = await fetchFromAPI('/search-community', { query: kw, count: 20 });
         const list = extractCommunitiesFromResponse(data);
-        renderCommunities(list, container, `Communities for "${kw}"`);
+        if (!list.length){
+            container.innerHTML = `<p>No communities found.</p>`;
+            return;
+        }
+        // Render simple cards with a Select button
+        container.innerHTML = list.map((c, i) => `
+      <div class="community-card" style="margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:12px;">
+          ${c.avatar ? `<img src="${esc(c.avatar)}" alt="" width="40" height="40" style="border-radius:8px;object-fit:cover">` : ''}
+          <div>
+            <strong>${esc(c.name || 'Community')}</strong>
+            ${c.id ? `<span class="badge badge-count">${esc(c.id)}</span>` : ''}
+            ${c.members ? `<div class="tweet-footer"><span>👥 ${esc(c.members)} members</span></div>` : ''}
+          </div>
+          <div style="margin-left:auto;">
+            <button class="btn-secondary select-community-btn" data-community-id="${esc(c.id || '')}" data-community-name="${esc(c.name || 'Community')}">Select</button>
+          </div>
+        </div>
+        ${c.desc ? `<p style="margin-top:8px">${esc(c.desc)}</p>` : ''}
+      </div>
+    `).join('');
+        // Remove old listener if exists, then add new one
+        container.removeEventListener('click', handleCommunitySelectClick);
+        container.addEventListener('click', handleCommunitySelectClick);
     } catch (err) {
         console.error('Community search error:', err);
         showError(container, 'Could not load communities.');
@@ -908,31 +975,23 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
 });
 
 document.getElementById('get-community-details-btn').addEventListener('click', async () => {
-    const idInput = document.getElementById('community-id-input');
-    const kw = (document.getElementById('community-search-input')?.value || '').trim();
     const container = document.getElementById('community-details-results') || document.getElementById('community-results');
     showLoading(container);
     try {
-        let communityId = (idInput?.value || '').trim();
-        if (!communityId) {
-            const searchData = await fetchFromAPI('/search-community', { query: kw || 'football', count: 20 });
-            const list = extractCommunitiesFromResponse(searchData);
-            if (!list.length) { showWarning(container, 'No community found. Try another keyword.'); return; }
-            communityId = list[0].id || list[0].rest_id || list[0].community_id;
-            if (idInput) idInput.value = communityId || '';
-        }
+        const communityId = await getCommunityIdOrResolve();
+        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
         const details = await fetchFromAPI('/community-details', { communityId });
-        // Show a concise "About" section from details; raw dump as fallback
         const name = dget(details, 'result.name') || dget(details, 'result.community.name') || 'Community';
         const desc = dget(details, 'result.description') || dget(details, 'result.community.description') || '';
         const members = dget(details, 'result.member_count') || dget(details, 'result.stats.member_count') || 0;
-        const html = `
-      <h3>${name}</h3>
-      ${desc ? `<p>${desc}</p>` : ''}
-      <div class="tweet-footer"><span>👥 ${members} members</span></div>
-      <pre class="json-dump">${esc(JSON.stringify(details, null, 2))}</pre>
+        container.innerHTML = `
+      <h3>${esc(name)} <small style="opacity:.7">(${esc(communityId)})</small></h3>
+      ${desc ? `<p>${esc(desc)}</p>` : ''}
+      <div class="tweet-footer"><span>👥 ${esc(members)} members</span></div>
+      <details style="margin-top:8px"><summary>Raw</summary>
+        <pre class="json-dump">${esc(JSON.stringify(details, null, 2))}</pre>
+      </details>
     `;
-        container.innerHTML = html;
     } catch (err) {
         console.error('Community details error:', err);
         showError(container, 'Could not load community details.');
@@ -940,49 +999,61 @@ document.getElementById('get-community-details-btn').addEventListener('click', a
 });
 
 document.getElementById('get-community-tweets-btn').addEventListener('click', async () => {
-    const communityId = document.getElementById('community-id-input').value.trim();
     const container = document.getElementById('community-results');
-    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
     showLoading(container);
     try {
+        const communityId = await getCommunityIdOrResolve();
+        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
         const data = await fetchFromAPI('/community-tweets', { communityId, searchType: 'Default', rankingMode: 'Relevance', count: 20 });
+        const usersIdx = buildUsersIndexDeep(data);
         const tweets = extractTweetsFromResponse(data);
-        const usersIndex = buildUsersIndex(data);
-        displayTweets(tweets, container, 'Community Tweets', { usersIndex });
-    } catch (error) { showError(container, error.message); }
+        displayTweets(tweets, container, 'Community Tweets', { usersIndex: usersIdx });
+    } catch (err) {
+        console.error('Community tweets error:', err);
+        showError(container, 'Could not load community tweets.');
+    }
 });
 
 document.getElementById('get-community-members-btn').addEventListener('click', async () => {
-    const communityId = document.getElementById('community-id-input').value.trim();
     const container = document.getElementById('community-results');
-    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
     showLoading(container);
     try {
+        const communityId = await getCommunityIdOrResolve();
+        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
         const data = await fetchFromAPI('/community-members', { communityId });
         displayGenericResults(data, container, 'Community Members');
-    } catch (error) { showError(container, error.message); }
+    } catch (err) {
+        console.error('Community members error:', err);
+        showError(container, 'Could not load community members.');
+    }
 });
 
 document.getElementById('get-community-moderators-btn').addEventListener('click', async () => {
-    const communityId = document.getElementById('community-id-input').value.trim();
     const container = document.getElementById('community-results');
-    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
     showLoading(container);
     try {
+        const communityId = await getCommunityIdOrResolve();
+        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
         const data = await fetchFromAPI('/community-moderators', { communityId });
         displayGenericResults(data, container, 'Community Moderators');
-    } catch (error) { showError(container, error.message); }
+    } catch (err) {
+        console.error('Community moderators error:', err);
+        showError(container, 'Could not load community moderators.');
+    }
 });
 
 document.getElementById('get-community-about-btn').addEventListener('click', async () => {
-    const communityId = document.getElementById('community-id-input').value.trim();
     const container = document.getElementById('community-results');
-    if (!communityId) { showError(container, 'Please enter a community ID first'); return; }
     showLoading(container);
     try {
+        const communityId = await getCommunityIdOrResolve();
+        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
         const data = await fetchFromAPI('/community-about', { communityId });
         displayGenericResults(data, container, 'About Community');
-    } catch (error) { showError(container, error.message); }
+    } catch (err) {
+        console.error('Community about error:', err);
+        showError(container, 'Could not load community about.');
+    }
 });
 
 async function doExplore(query, type = 'Top', count = 20, container) {

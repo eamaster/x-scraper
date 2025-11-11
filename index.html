@@ -107,14 +107,19 @@
                 <input type="text" id="community-search-input" placeholder="Search communities (e.g., football)">
                 <button id="search-community-btn" class="btn-primary">Search</button>
             </div>
+            <div id="community-search-results" style="margin-top:10px;"></div>
             <div class="search-container">
                 <button id="get-community-topics-btn" class="btn-secondary">Get Topics</button>
                 <button id="explore-community-timeline-btn" class="btn-secondary">Explore Timeline</button>
             </div>
             
             <h3>Community Details</h3>
+            <label>Community Details <small>(pick from search — ID optional)</small></label>
+            <div style="margin:6px 0;">
+                <span id="selected-community-pill" style="display:none;padding:4px 8px;border-radius:999px;background:#eef;border:1px solid #ccd;"></span>
+            </div>
             <div class="search-container">
-                <input type="text" id="community-id-input" placeholder="Community ID">
+                <input type="text" id="community-id-input" class="form-control" placeholder="(optional) will auto-fill when you select a community">
                 <button id="get-community-details-btn" class="btn-primary">Get Details</button>
             </div>
             <div class="button-group">
