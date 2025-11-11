@@ -1004,7 +1004,7 @@ async function doGetTopics(container) {
   <div id="topic-chips" style="display:flex;flex-wrap:wrap;gap:8px;"></div>`;
         const chips = document.getElementById('topic-chips');
         chips.innerHTML = flat.map(t =>
-          `<button class="chip" data-id="${esc(t.topic_id)}" data-name="${esc(t.topic_name)}" style="padding:6px 12px;border:1px solid #1da1f2;background:#fff;color:#1da1f2;border-radius:16px;cursor:pointer;font-size:14px;transition:all 0.2s;">#${esc(t.topic_name)} (${esc(t.topic_id)})</button>`
+          `<button class="chip" data-id="${esc(t.topic_id)}" data-name="${esc(t.topic_name)}">#${esc(t.topic_name)} (${esc(t.topic_id)})</button>`
         ).join('');
         chips.addEventListener('click', async (e) => {
             const btn = e.target.closest('.chip');
