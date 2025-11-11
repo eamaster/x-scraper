@@ -25,6 +25,28 @@ const WORKER_URL = resolveWorkerURL();
 // ---- helpers ----
 function dget(o, p) { if (!o || !p) return; return p.replace(/\[(\d+)\]/g, '.$1').split('.').reduce((x,k)=> x && k in x ? x[k] : undefined, o); }
 
+// Build a users index from modern search/list/community timelines and legacy globalObjects
+function buildUsersIndex(json) {
+  const idx = {};
+  // Modern /search-v2: result.timeline.instructions[].entries[].content.itemContent.tweet_results.result.core.user_results.result
+  const instructions = dget(json, 'result.timeline.instructions') || [];
+  for (const ins of instructions) {
+    for (const e of (ins.entries || [])) {
+      const u = dget(e, 'content.itemContent.tweet_results.result.core.user_results.result') ||
+                dget(e, 'content.itemContent.tweet_results.core.user_results.result');
+      if (u) {
+        const id = u.rest_id || dget(u, 'legacy.id_str');
+        const legacy = u.legacy || u;
+        if (id && legacy) idx[id] = legacy;
+      }
+    }
+  }
+  // Legacy/alt: globalObjects.users
+  const go = dget(json, 'globalObjects.users');
+  if (go) for (const [id, u] of Object.entries(go)) if (!idx[id]) idx[id] = u;
+  return idx;
+}
+
 // Shallow DFS to find the first object that contains any of the given keys
 function findFirst(obj, predicate) {
   const stack = [obj];
@@ -239,8 +261,8 @@ function renderUserCard(user, container) {
         </div>`;
 }
 
-function renderSearchResults(tweets, container, query) {
-    displayTweets(tweets, container, `Search Results for "${query}"`);
+function renderSearchResults(tweets, container, query, ctx = {}) {
+    displayTweets(tweets, container, `Search Results for "${query}"`, ctx);
 }
 
 function renderCommunityTopics(topics, container) {
@@ -560,7 +582,8 @@ document.getElementById('explore-community-timeline-btn').addEventListener('clic
     try {
         const data = await fetchFromAPI('/explore-community-timeline', {});
         const tweets = extractTweetsFromResponse(data);
-        displayTweets(tweets, container, 'Community Timeline');
+        const usersIndex = buildUsersIndex(data);
+        displayTweets(tweets, container, 'Community Timeline', { usersIndex });
     } catch (error) { showError(container, error.message); }
 });
 
@@ -583,7 +606,8 @@ document.getElementById('get-community-tweets-btn').addEventListener('click', as
     try {
         const data = await fetchFromAPI('/community-tweets', { communityId, searchType: 'Default', rankingMode: 'Relevance', count: 20 });
         const tweets = extractTweetsFromResponse(data);
-        displayTweets(tweets, container, 'Community Tweets');
+        const usersIndex = buildUsersIndex(data);
+        displayTweets(tweets, container, 'Community Tweets', { usersIndex });
     } catch (error) { showError(container, error.message); }
 });
 
@@ -633,19 +657,21 @@ async function doExplore(query, type = 'Top', count = 20, container) {
       return;
     }
     let tweets = extractTweetsFromSearchV2(data);
+    let usersIndex = buildUsersIndex(data);
     if (!tweets.length) {
       data = await fetchFromAPI('/search', { query, type, count });
       tweets = extractTweetsFromSearchV2(data);
       if (!tweets.length) tweets = extractTweetsLegacy(data);
+      usersIndex = Object.keys(usersIndex).length ? usersIndex : buildUsersIndex(data);
     }
     if (!tweets.length) {
       showWarning(container, 'No results found for this query.');
       return;
     }
-    renderSearchResults(tweets, container, query);
+    renderSearchResults(tweets, container, query, { usersIndex });
   } catch (err) {
     console.error('Explore error:', err);
-    showWarning(container, 'Search failed. Try another query or reduce count.');
+    showWarning(container, 'Search failed. Try another query.');
   }
 }
 
@@ -694,7 +720,8 @@ document.getElementById('get-list-timeline-btn').addEventListener('click', async
     try {
         const data = await fetchFromAPI('/list-timeline', { listId });
         const tweets = extractTweetsFromResponse(data);
-        displayTweets(tweets, container, 'List Timeline');
+        const usersIndex = buildUsersIndex(data);
+        displayTweets(tweets, container, 'List Timeline', { usersIndex });
     } catch (error) { showError(container, error.message); }
 });
 
@@ -789,43 +816,36 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
 // DISPLAY FUNCTIONS
 // ====================
 
-function normalizeTweetAndAuthor(t) {
+function normalizeTweetAndAuthor(t, usersIndex) {
     const node = t?.result || t;
     const legacy = node.legacy || node;
-    const author =
+    let author =
         dget(node, 'core.user_results.result.legacy') ||
         node.user?.legacy || node.user ||
         dget(node, 'legacy.user') || {};
+    // If author missing, resolve via user_id_str using usersIndex from the response
+    const uid = dget(legacy, 'user_id_str') || dget(node, 'user_id_str');
+    if ((!author.screen_name || !author.name) && uid && usersIndex && usersIndex[uid]) {
+        author = { ...usersIndex[uid], ...author };
+    }
     return { legacy, author };
 }
 
-function displayTweets(tweets, container, title) {
-    console.log('📝 displayTweets called with:', tweets);
-
-    if (!tweets) {
+function displayTweets(tweets, container, title, ctx = {}) {
+    if (!Array.isArray(tweets) || tweets.length === 0) {
         container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
         return;
     }
-    if (!Array.isArray(tweets)) {
-        console.error('⚠️ tweets is not an array:', typeof tweets, tweets);
-        container.innerHTML = `<h3>${title}</h3><div class="error">⚠️ Unexpected data format. Check console for details.</div>`;
-        return;
-    }
-    if (tweets.length === 0) {
-        container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
-        return;
-    }
-
     container.innerHTML = `<h3>${title}</h3>${
         tweets.map(t => {
-            const { legacy, author } = normalizeTweetAndAuthor(t);
+            const { legacy, author } = normalizeTweetAndAuthor(t, ctx.usersIndex);
             return `<div class="tweet-card">
         <p><strong>@${author.screen_name || 'Unknown'}:</strong> ${legacy.full_text || legacy.text || 'No content'}</p>
         <div class="tweet-footer">
-          <span>❤️ ${formatNumber(legacy.favorite_count || legacy.favorites || 0)}</span>
-          <span>🔁 ${formatNumber(legacy.retweet_count || legacy.retweets || 0)}</span>
-          <span>💬 ${formatNumber(legacy.reply_count || legacy.replies || 0)}</span>
-          <span>📅 ${formatDate(legacy.created_at || t.created_at || 'Unknown')}</span>
+          <span>❤️ ${formatNumber(legacy.favorite_count || 0)}</span>
+          <span>🔁 ${formatNumber(legacy.retweet_count || 0)}</span>
+          <span>💬 ${formatNumber(legacy.reply_count || 0)}</span>
+          <span>📅 ${formatDate(legacy.created_at || 'Unknown')}</span>
         </div>
       </div>`;
         }).join('')
