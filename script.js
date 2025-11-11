@@ -816,6 +816,26 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
 // DISPLAY FUNCTIONS
 // ====================
 
+function unwrapTweet(node) {
+    // Accept result wrapper, legacy-only nodes, etc.
+    return node?.result || node;
+}
+
+function resolveAuthorFromTweet(tweet, usersIndex = {}) {
+    const t = unwrapTweet(tweet);
+    // 1) Modern path: embedded author under core.user_results.result.legacy
+    const u1 = dget(t, 'core.user_results.result.legacy');
+    if (u1?.screen_name) return { name: u1.name || 'Unknown', username: u1.screen_name };
+    // 2) Legacy link: author id on the tweet points into usersIndex
+    const uid = dget(t, 'legacy.user_id_str') || dget(t, 'user_id_str');
+    const u2 = (uid && usersIndex[uid]) ? usersIndex[uid] : null;
+    if (u2?.screen_name) return { name: u2.name || 'Unknown', username: u2.screen_name };
+    // 3) Fallback: shallow DFS to find first object with a screen_name
+    const any = findFirst(t, o => typeof o === 'object' && o && ('screen_name' in o || 'name' in o));
+    if (any?.screen_name) return { name: any.name || 'Unknown', username: any.screen_name };
+    return { name: 'Unknown', username: 'unknown' };
+}
+
 function normalizeTweetAndAuthor(t, usersIndex) {
     const node = t?.result || t;
     const legacy = node.legacy || node;
@@ -838,14 +858,18 @@ function displayTweets(tweets, container, title, ctx = {}) {
     }
     container.innerHTML = `<h3>${title}</h3>${
         tweets.map(t => {
-            const { legacy, author } = normalizeTweetAndAuthor(t, ctx.usersIndex);
+            const node = unwrapTweet(t);
+            const legacy = node.legacy || node;
+            const author = resolveAuthorFromTweet(t, ctx.usersIndex || {});
+            const text = legacy.full_text || legacy.text || node.full_text || node.text || '';
+            const date = legacy.created_at || node.created_at || 'Unknown';
             return `<div class="tweet-card">
-        <p><strong>@${author.screen_name || 'Unknown'}:</strong> ${legacy.full_text || legacy.text || 'No content'}</p>
+        <p><strong>@${author.username}:</strong> ${text || 'No content'}</p>
         <div class="tweet-footer">
           <span>❤️ ${formatNumber(legacy.favorite_count || 0)}</span>
           <span>🔁 ${formatNumber(legacy.retweet_count || 0)}</span>
           <span>💬 ${formatNumber(legacy.reply_count || 0)}</span>
-          <span>📅 ${formatDate(legacy.created_at || 'Unknown')}</span>
+          <span>📅 ${formatDate(date)}</span>
         </div>
       </div>`;
         }).join('')

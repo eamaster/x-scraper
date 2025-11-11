@@ -89,6 +89,18 @@
                 .reduce((o, k) => (o && k in o ? o[k] : undefined), obj);
         }
 
+        // Shallow DFS to find the first object that contains any of the given keys
+        function findFirst(obj, predicate) {
+            const stack = [obj];
+            while (stack.length) {
+                const cur = stack.pop();
+                if (cur && typeof cur === 'object') {
+                    if (predicate(cur)) return cur;
+                    for (const v of Object.values(cur)) if (v && typeof v === 'object') stack.push(v);
+                }
+            }
+        }
+
         function normalizeUser(json) {
             const candidates = [
                 json,
@@ -117,9 +129,13 @@
                 if (first) u = first;
             }
 
+            if (!u) {
+                const found = findFirst(json, o => ('screen_name' in o) || ('name' in o));
+                if (found) u = found;
+            }
+
             const name = dget(u, 'name') || dget(json, 'user.name') || '';
             const username = dget(u, 'screen_name') || dget(json, 'user.screen_name') || '';
-
             const description = dget(u, 'description') || '';
             const avatar =
                 dget(u, 'profile_image_url_https') ||
@@ -127,10 +143,17 @@
                 '';
             const verified = !!(dget(u, 'verified') || dget(u, 'is_blue_verified'));
 
-            const tweets = dget(u, 'statuses_count');
-            const followers = dget(u, 'followers_count');
-            const following = dget(u, 'friends_count');
-            const favourites = dget(u, 'favourites_count') ?? dget(u, 'favouritesCount');
+            // Probe for metrics in multiple places to avoid zeros on valid users
+            const tweets     = dget(u, 'statuses_count') ??
+                               dget(json, 'result.data.user.result.legacy.statuses_count') ??
+                               dget(json, 'user.legacy.statuses_count');
+            const followers  = dget(u, 'followers_count') ??
+                               dget(json, 'result.data.user.result.legacy.followers_count');
+            const following  = dget(u, 'friends_count') ??
+                               dget(json, 'result.data.user.result.legacy.friends_count');
+            const favourites = dget(u, 'favourites_count') ??
+                               dget(u, 'favouritesCount') ??
+                               dget(json, 'result.data.user.result.legacy.favourites_count');
 
             return {
                 name,
@@ -246,8 +269,9 @@
             const data = await testAPI('/user', { username: 'elonmusk' }, 'Get User Profile');
             if (data) {
                 try {
-                    const user = normalizeUser(data);
-                    log(`Normalized user: ${user.name} (@${user.username})`, 'success');
+                    const normalized = normalizeUser(data);
+                    log('---', 'info');
+                    log(`Normalized user: ${normalized.name} (@${normalized.username})`, 'success');
                 } catch (err) {
                     log(`normalizeUser error: ${err.message}`, 'error');
                 }
