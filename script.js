@@ -205,18 +205,29 @@ function normalizeUser(json) {
     let userObj = null;
     
     // First, try to find a user object with legacy property
+    // Note: In new Twitter API, user data is at result.data.user.result
+    // which has both core (for screen_name/name) and legacy (for metrics)
     for (const c of candidates) {
-        if (dget(c, 'legacy')) {
-            userObj = c;
-            u = c.legacy;
-            console.log('✅ Found user with legacy at path:', c === json ? 'root' : 'nested');
-            break;
-        }
-        if (dget(c, 'user.legacy')) {
-            userObj = c;
-            u = c.user.legacy;
-            console.log('✅ Found user.user.legacy');
-            break;
+        if (c && typeof c === 'object') {
+            // Check if this candidate has both legacy and core (new API structure)
+            if (c.legacy && c.core) {
+                userObj = c;
+                u = c.legacy;
+                console.log('✅ Found user with both legacy and core (new API structure)');
+                break;
+            }
+            // Check if this candidate has legacy (older API structure)
+            if (c.legacy && !userObj) {
+                userObj = c;
+                u = c.legacy;
+                console.log('✅ Found user with legacy at path:', c === json ? 'root' : 'nested');
+            }
+            // Check if this candidate has user.legacy
+            if (c.user && c.user.legacy && !userObj) {
+                userObj = c;
+                u = c.user.legacy;
+                console.log('✅ Found user.user.legacy');
+            }
         }
     }
 
@@ -278,31 +289,56 @@ function normalizeUser(json) {
     }
 
     // Extract user data from the found user object
-    const name = dget(u, 'name') || 
-                 dget(userObj, 'name') ||
+    // IMPORTANT: In new Twitter API, screen_name is in core, NOT legacy!
+    // Structure: result.data.user.result.core.screen_name (for username/name)
+    //           result.data.user.result.legacy (for metrics like followers_count, statuses_count)
+    // So we need to check core first, then fall back to legacy
+    const name = (userObj?.core?.name) ||
+                 (userObj?.name) ||
+                 dget(u, 'name') ||
+                 dget(json, 'result.data.user.result.core.name') ||
                  dget(json, 'result.data.user.result.legacy.name') ||
+                 dget(json, 'result.data.user_by_screen_name.result.core.name') ||
                  dget(json, 'result.data.user_by_screen_name.result.legacy.name') ||
                  '';
     
-    const username = dget(u, 'screen_name') || 
-                     dget(userObj, 'screen_name') ||
+    const username = (userObj?.core?.screen_name) ||
+                     (userObj?.screen_name) ||
+                     dget(u, 'screen_name') ||
+                     dget(json, 'result.data.user.result.core.screen_name') ||
                      dget(json, 'result.data.user.result.legacy.screen_name') ||
+                     dget(json, 'result.data.user_by_screen_name.result.core.screen_name') ||
                      dget(json, 'result.data.user_by_screen_name.result.legacy.screen_name') ||
                      '';
     
     if (!username) {
         console.error('❌ Could not extract username from user data');
-        console.error('User object keys:', Object.keys(u || {}));
+        console.error('User object (legacy) keys:', Object.keys(u || {}));
         console.error('UserObj keys:', Object.keys(userObj || {}));
+        console.error('UserObj.core:', userObj?.core);
+        console.error('UserObj.core?.screen_name:', userObj?.core?.screen_name);
+        console.error('UserObj.core?.name:', userObj?.core?.name);
+        if (userObj) {
+            console.error('Full userObj structure:', JSON.stringify({
+                hasCore: !!userObj.core,
+                hasLegacy: !!userObj.legacy,
+                coreKeys: userObj.core ? Object.keys(userObj.core) : [],
+                legacyKeys: userObj.legacy ? Object.keys(userObj.legacy) : []
+            }, null, 2));
+        }
+        console.error('Full userObj (first 2000 chars):', JSON.stringify(userObj, null, 2).substring(0, 2000));
         throw new Error('User not found - could not extract username');
     }
     
+    console.log('✅ Extracted username:', username, 'from core:', !!userObj?.core?.screen_name);
+    
     // Extract avatar
     const avatar =
+        (userObj?.avatar?.image_url) ||
         dget(u, 'profile_image_url_https') ||
         dget(u, 'profile_image_url') ||
-        dget(userObj, 'profile_image_url_https') ||
-        dget(userObj, 'profile_image_url') ||
+        (userObj?.profile_image_url_https) ||
+        (userObj?.profile_image_url) ||
         dget(json, 'result.data.user.result.avatar.image_url') ||
         dget(json, 'result.data.user_by_screen_name.result.avatar.image_url') ||
         dget(json, 'user.avatar.image_url') || '';
@@ -310,7 +346,8 @@ function normalizeUser(json) {
     // Extract description
     const description =
         dget(u, 'description') ||
-        dget(userObj, 'description') ||
+        (userObj?.legacy?.description) ||
+        (userObj?.description) ||
         dget(json, 'result.data.user.result.legacy.description') ||
         dget(json, 'result.data.user_by_screen_name.result.legacy.description') ||
         dget(json, 'user.description') || '';
@@ -318,10 +355,13 @@ function normalizeUser(json) {
     // Extract verified status
     const verified = !!(dget(u, 'verified') || 
                        dget(u, 'is_blue_verified') ||
-                       dget(userObj, 'verified') ||
-                       dget(userObj, 'is_blue_verified') ||
+                       (userObj?.is_blue_verified) ||
+                       (userObj?.verified) ||
+                       (userObj?.verification?.verified) ||
                        dget(json, 'result.data.user.result.is_blue_verified') ||
-                       dget(json, 'result.data.user_by_screen_name.result.is_blue_verified'));
+                       dget(json, 'result.data.user.result.verification.verified') ||
+                       dget(json, 'result.data.user_by_screen_name.result.is_blue_verified') ||
+                       dget(json, 'result.data.user_by_screen_name.result.verification.verified'));
 
     // Extract metrics
     const tweets = dget(u, 'statuses_count') ??
