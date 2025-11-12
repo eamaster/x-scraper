@@ -1489,15 +1489,152 @@ document.getElementById('get-tweet-btn').addEventListener('click', async () => {
         console.log(`🔍 Fetching tweet details for ID: ${tweetId}`);
         const data = await fetchFromAPI('/tweet-v2', { pid: tweetId });
         console.log('📊 Tweet details response:', data);
+        console.log('📊 Tweet details response keys:', Object.keys(data || {}));
+        console.log('📊 Tweet details response structure (first 1500 chars):', JSON.stringify(data, null, 2).substring(0, 1500));
         
-        // Extract tweet from response
-        const tweet = data.result || data;
-        if (!tweet) {
+        // Extract tweet from response - handle multiple response structures
+        // The /tweet-v2 endpoint returns: { result: { tweetResult: { result: { ... } } } }
+        // Or sometimes: { tweetResult: { result: { ... } } }
+        let tweet = null;
+        
+        // Log full response structure for debugging
+        console.log('📊 Full response keys:', Object.keys(data || {}));
+        if (data.result) {
+            console.log('📊 data.result keys:', Object.keys(data.result || {}));
+            if (data.result.tweetResult) {
+                console.log('📊 data.result.tweetResult keys:', Object.keys(data.result.tweetResult || {}));
+                if (data.result.tweetResult.result) {
+                    console.log('📊 data.result.tweetResult.result keys:', Object.keys(data.result.tweetResult.result || {}));
+                }
+            }
+        }
+        
+        // Try all possible paths in order of likelihood
+        // Based on console logs, the structure is often: { result: { tweetResult: { result: { ... } } } }
+        // Or: { tweetResult: { result: { ... } } }
+        
+        // Priority 1: Check data.result.tweetResult.result (most common for /tweet-v2)
+        if (data.result?.tweetResult?.result) {
+            tweet = data.result.tweetResult.result;
+            console.log('✅ Extracted tweet from data.result.tweetResult.result');
+        }
+        // Priority 2: Check data.tweetResult.result
+        else if (data.tweetResult?.result) {
+            tweet = data.tweetResult.result;
+            console.log('✅ Extracted tweet from data.tweetResult.result');
+        }
+        // Priority 3: Check data.result.result
+        else if (data.result?.result) {
+            tweet = data.result.result;
+            console.log('✅ Extracted tweet from data.result.result');
+            // If this result has tweetResult, unwrap further
+            if (tweet.tweetResult?.result) {
+                tweet = tweet.tweetResult.result;
+                console.log('✅ Further unwrapped to data.result.result.tweetResult.result');
+            }
+        }
+        // Priority 4: Check if data.result is the tweet itself
+        else if (data.result?.__typename === 'Tweet' || data.result?.legacy || data.result?.rest_id) {
+            tweet = data.result;
+            console.log('✅ Extracted tweet from data.result (direct Tweet object)');
+            // If result has tweetResult, unwrap it
+            if (tweet.tweetResult?.result) {
+                tweet = tweet.tweetResult.result;
+                console.log('✅ Unwrapped data.result.tweetResult.result');
+            }
+        }
+        // Priority 5: Check data.tweetResult (without nested result)
+        else if (data.tweetResult) {
+            tweet = data.tweetResult;
+            console.log('✅ Extracted tweet from data.tweetResult');
+            // If it has a nested result, unwrap it
+            if (tweet.result && (tweet.result.__typename === 'Tweet' || tweet.result.legacy || tweet.result.rest_id)) {
+                tweet = tweet.result;
+                console.log('✅ Unwrapped data.tweetResult.result');
+            }
+        }
+        // Priority 6: Check data.result (fallback)
+        else if (data.result) {
+            tweet = data.result;
+            console.log('✅ Extracted tweet from data.result (fallback)');
+        }
+        // Priority 7: Check if data itself is a tweet
+        else if (data.__typename === 'Tweet' || data.legacy || data.rest_id) {
+            tweet = data;
+            console.log('✅ Using data itself as tweet (direct Tweet)');
+        }
+        // Last resort: use data itself
+        else {
+            tweet = data;
+            console.log('⚠️ Using data itself as tweet (last resort fallback)');
+        }
+        
+        if (!tweet || typeof tweet !== 'object') {
+            console.error('❌ No valid tweet object found');
+            console.error('Data structure:', JSON.stringify(data, null, 2).substring(0, 2000));
             throw new Error('No tweet data found in response');
+        }
+        
+        console.log('✅ Extracted tweet. Tweet keys:', Object.keys(tweet || {}));
+        console.log('✅ Tweet has __typename:', tweet.__typename);
+        console.log('✅ Tweet has rest_id:', tweet.rest_id);
+        console.log('✅ Tweet has legacy:', !!tweet.legacy);
+        if (tweet.legacy) {
+            console.log('✅ Tweet legacy keys:', Object.keys(tweet.legacy || {}));
+            console.log('✅ Tweet legacy has full_text:', !!tweet.legacy.full_text);
+            console.log('✅ Tweet legacy has text:', !!tweet.legacy.text);
+            if (tweet.legacy.full_text) {
+                console.log('✅ Tweet text (first 100 chars):', tweet.legacy.full_text.substring(0, 100));
+            }
+        }
+        console.log('✅ Tweet structure (first 2000 chars):', JSON.stringify(tweet, null, 2).substring(0, 2000));
+        
+        // Validate tweet - check if it has the necessary properties
+        const hasLegacy = tweet.legacy !== undefined && tweet.legacy !== null;
+        const hasText = !!(tweet.legacy?.full_text || tweet.legacy?.text || tweet.full_text || tweet.text || tweet.note_tweet?.note_tweet_results?.result?.text);
+        const hasId = !!(tweet.rest_id || tweet.legacy?.id_str || tweet.id_str);
+        
+        console.log('✅ Tweet validation - has legacy:', hasLegacy, 'has text:', hasText, 'has ID:', hasId);
+        
+        // If tweet doesn't look valid, try one more unwrap
+        if (!hasLegacy && !hasText && !hasId && tweet.result) {
+            console.warn('⚠️ Tweet doesn\'t look valid, trying to unwrap tweet.result...');
+            if (tweet.result.__typename === 'Tweet' || tweet.result.legacy || tweet.result.rest_id) {
+                tweet = tweet.result;
+                console.log('✅ Unwrapped to tweet.result');
+            }
+        }
+        
+        // Final check - ensure we have a valid tweet
+        if (!tweet.legacy && !tweet.rest_id && !tweet.__typename) {
+            console.error('❌ Tweet still doesn\'t look valid after all unwrapping attempts');
+            console.error('Tweet keys:', Object.keys(tweet));
+            console.error('Full tweet (first 3000 chars):', JSON.stringify(tweet, null, 2).substring(0, 3000));
+            // Don't throw error - try to display it anyway and let displayTweets handle it
         }
         
         // Build users index for author resolution
         const usersIdx = buildUsersIndexDeep(data);
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+        
+        // Extract users from tweet itself
+        const userPaths = [
+            dget(tweet, 'core.user_results.result'),
+            dget(tweet, 'user_results.result'),
+            tweet.core?.user_results?.result,
+            tweet.user_results?.result,
+        ];
+        for (const user of userPaths) {
+            if (!user) continue;
+            const legacy = user.legacy || user;
+            const uid = user.rest_id || legacy.id_str || user.id_str || user.id;
+            const uidStr = uid ? String(uid) : null;
+            if (uidStr && (legacy.screen_name || user.screen_name || user.core?.screen_name)) {
+                if (!usersIdx[uidStr]) {
+                    usersIdx[uidStr] = legacy;
+                }
+            }
+        }
         
         // Update selected tweet
         setSelectedTweet(tweet, tweetId);
@@ -3315,8 +3452,24 @@ function buildUsersIndexDeep(json) {
 }
 
 function unwrapTweet(node) {
-    // Accept result wrapper, legacy-only nodes, etc.
-    return node?.result || node;
+    if (!node || typeof node !== 'object') return node;
+    
+    // Handle tweetResult wrapper (from /tweet-v2 endpoint)
+    if (node.tweetResult) {
+        return node.tweetResult.result || node.tweetResult;
+    }
+    
+    // Handle result wrapper
+    if (node.result) {
+        // Check if result has tweetResult
+        if (node.result.tweetResult) {
+            return node.result.tweetResult.result || node.result.tweetResult;
+        }
+        return node.result;
+    }
+    
+    // Return node as-is
+    return node;
 }
 
 function resolveAuthorFromTweet(tweet, usersIndex = {}) {
@@ -3458,29 +3611,68 @@ function displayTweets(tweets, container, title, ctx = {}) {
     container.innerHTML = `<h3>${title}</h3>${
         tweets.map((t, idx) => {
             // Unwrap tweet node - try multiple unwrapping strategies
-            let node = unwrapTweet(t);
-            if (!node) {
-                console.warn(`⚠️ Tweet ${idx} has no node after unwrap`);
+            let node = t;
+            
+            // First, try to unwrap using unwrapTweet function
+            node = unwrapTweet(node) || node;
+            
+            // Further unwrapping if needed - handle tweetResult wrapper (from /tweet-v2)
+            if (node && typeof node === 'object') {
+                // Check for tweetResult wrapper
+                if (node.tweetResult) {
+                    if (node.tweetResult.result) {
+                        node = node.tweetResult.result;
+                    } else {
+                        node = node.tweetResult;
+                    }
+                }
+                // Check for tweet wrapper
+                if (node.tweet) {
+                    if (node.tweet.result) {
+                        node = node.tweet.result;
+                    } else {
+                        node = node.tweet;
+                    }
+                }
+                // Check for result wrapper
+                if (node.result) {
+                    // If result looks like a tweet, use it
+                    if (node.result.__typename === 'Tweet' || node.result.legacy || node.result.rest_id) {
+                        node = node.result;
+                    }
+                }
+            }
+            
+            if (!node || typeof node !== 'object') {
+                console.warn(`⚠️ Tweet ${idx} has no valid node after unwrap`);
                 return '';
             }
             
-            // Further unwrapping if needed
-            if (node.tweet) {
-                node = node.tweet.result || node.tweet;
-            }
-            if (node.result && node.result.legacy) {
-                node = node.result;
+            // Try multiple paths for legacy object
+            let legacy = null;
+            
+            // Direct legacy access
+            if (node.legacy && typeof node.legacy === 'object') {
+                legacy = node.legacy;
+            } else if (node.full_text || node.created_at || node.text || (node.favorite_count !== undefined)) {
+                // Node itself might be the legacy object
+                legacy = node;
+            } else {
+                // Try nested paths
+                legacy = node.tweet?.legacy || 
+                        node.result?.legacy || 
+                        node.tweetResult?.result?.legacy ||
+                        null;
             }
             
-            // Try multiple paths for legacy object
-            let legacy = node.legacy;
+            // If still no legacy, check if node has tweet-like properties
             if (!legacy) {
-                // Check if node itself is the legacy object (has full_text or created_at)
-                if (node.full_text || node.created_at || node.text || (node.favorite_count !== undefined)) {
+                if (node.__typename === 'Tweet' && node.rest_id) {
+                    // This is a tweet object, legacy might not exist, but we can use node directly
                     legacy = node;
                 } else {
-                    // Try nested paths
-                    legacy = node.tweet?.legacy || node.result?.legacy || node;
+                    // Fallback to node itself
+                    legacy = node;
                 }
             }
             
@@ -3490,19 +3682,50 @@ function displayTweets(tweets, container, title, ctx = {}) {
             }
             
             // Try multiple paths for tweet text - be very aggressive
+            // Check note_tweet first (for long tweets/articles)
+            const noteText = dget(node, 'note_tweet.note_tweet_results.result.text') ||
+                            dget(node, 'note_tweet.text') ||
+                            node.note_tweet?.note_tweet_results?.result?.text ||
+                            node.note_tweet?.text ||
+                            '';
+            
+            // Try all possible paths for text
             const text = 
+                noteText ||
                 legacy?.full_text || 
                 legacy?.text || 
                 node?.full_text || 
                 node?.text || 
                 dget(node, 'tweet.legacy.full_text') ||
                 dget(node, 'tweet.legacy.text') ||
+                dget(node, 'tweetResult.result.legacy.full_text') ||
+                dget(node, 'tweetResult.result.legacy.text') ||
                 dget(node, 'result.legacy.full_text') ||
                 dget(node, 'result.legacy.text') ||
                 dget(node, 'legacy.full_text') ||
                 dget(node, 'legacy.text') ||
-                (node.note_tweet?.note_tweet_results?.result?.text) ||
-                (node.note_tweet?.text) ||
+                // Try to find any text property in the object
+                (() => {
+                    // DFS search for text in legacy object
+                    if (legacy && typeof legacy === 'object') {
+                        const legacyKeys = Object.keys(legacy);
+                        for (const key of legacyKeys) {
+                            if ((key.includes('text') || key === 'full_text') && typeof legacy[key] === 'string' && legacy[key].length > 0) {
+                                return legacy[key];
+                            }
+                        }
+                    }
+                    // DFS search in node
+                    if (node && typeof node === 'object') {
+                        const nodeKeys = Object.keys(node);
+                        for (const key of nodeKeys) {
+                            if ((key.includes('text') || key === 'full_text') && typeof node[key] === 'string' && node[key].length > 0) {
+                                return node[key];
+                            }
+                        }
+                    }
+                    return '';
+                })() ||
                 '';
             
             // Try multiple paths for date
@@ -3570,14 +3793,62 @@ function displayTweets(tweets, container, title, ctx = {}) {
             // Resolve author
             const author = resolveAuthorFromTweet(t, ctx.usersIndex || {});
             
-            // Debug first tweet if no text
+            // Debug first tweet if no text - log full structure for analysis
             if (!text && idx === 0) {
                 console.warn('⚠️ First tweet has no text.');
                 console.warn('  Node keys:', Object.keys(node || {}));
                 console.warn('  Legacy keys:', Object.keys(legacy || {}));
                 console.warn('  Node has full_text:', !!node.full_text, 'legacy has full_text:', !!legacy?.full_text);
-                // Log the actual structure
-                console.warn('  Full node (first 1000 chars):', JSON.stringify(node, null, 2).substring(0, 1000));
+                console.warn('  Node.__typename:', node.__typename);
+                console.warn('  Node.rest_id:', node.rest_id);
+                // Log the full node structure
+                console.warn('  Full node (first 2000 chars):', JSON.stringify(node, null, 2).substring(0, 2000));
+                // Log the full legacy structure if it exists
+                if (legacy && legacy !== node) {
+                    console.warn('  Full legacy (first 2000 chars):', JSON.stringify(legacy, null, 2).substring(0, 2000));
+                }
+                
+                // Try to find text in any property of the node
+                const allKeys = Object.keys(node || {});
+                for (const key of allKeys) {
+                    const value = node[key];
+                    if (typeof value === 'string' && value.length > 10 && value.length < 500) {
+                        console.warn(`  Found potential text in node.${key}:`, value.substring(0, 100));
+                    }
+                    if (typeof value === 'object' && value !== null) {
+                        const subKeys = Object.keys(value);
+                        for (const subKey of subKeys) {
+                            if (subKey.includes('text') || subKey.includes('Text')) {
+                                console.warn(`  Found potential text key: node.${key}.${subKey}:`, value[subKey]);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // If still no text, try one more aggressive search
+            if (!text) {
+                // DFS search for any text-like property
+                const findTextInObject = (obj, depth = 0) => {
+                    if (depth > 3 || !obj || typeof obj !== 'object') return null;
+                    for (const [key, value] of Object.entries(obj)) {
+                        if (key.includes('text') || key.includes('Text') || key === 'full_text' || key === 'text') {
+                            if (typeof value === 'string' && value.length > 5) {
+                                return value;
+                            }
+                        }
+                        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+                            const found = findTextInObject(value, depth + 1);
+                            if (found) return found;
+                        }
+                    }
+                    return null;
+                };
+                const foundText = findTextInObject(node);
+                if (foundText) {
+                    console.log(`✅ Found text via DFS: ${foundText.substring(0, 50)}...`);
+                    text = foundText;
+                }
             }
             
             return `<div class="tweet-card">
