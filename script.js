@@ -1438,7 +1438,9 @@ function getTweetIdOrResolve() {
 document.getElementById('search-tweets-btn').addEventListener('click', async () => {
     const query = document.getElementById('tweet-search-input').value.trim();
     const type = document.getElementById('tweet-search-type').value;
-    const count = document.getElementById('tweet-search-count').value || 20;
+    const countInput = document.getElementById('tweet-search-count').value;
+    // Convert to number and ensure minimum of 1
+    const count = Math.max(1, parseInt(countInput, 10) || 20);
     const container = document.getElementById('tweet-search-results');
     
     if (!query) {
@@ -1459,16 +1461,22 @@ document.getElementById('search-tweets-btn').addEventListener('click', async () 
     
     showLoading(container);
     try {
-        console.log(`🔍 Searching tweets for: ${query}`);
+        console.log(`🔍 Searching tweets for: ${query} with count: ${count}`);
         const data = await fetchFromAPI('/search-v2', { query, type, count });
         
         // Extract tweets
-        const tweets = extractTweetsFromResponse(data);
+        let tweets = extractTweetsFromResponse(data);
         console.log(`✅ Found ${tweets.length} tweets`);
         
         if (tweets.length === 0) {
             showWarning(container, 'No tweets found. Try a different search query.');
             return;
+        }
+        
+        // Limit results to requested count (API might return more)
+        if (tweets.length > count) {
+            tweets = tweets.slice(0, count);
+            console.log(`📊 Limited results to ${count} tweets (API returned ${tweets.length} total)`);
         }
         
         // Build users index
