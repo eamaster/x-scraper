@@ -703,7 +703,9 @@ document.querySelectorAll('.tab-btn').forEach(button => {
 document.getElementById('search-btn').addEventListener('click', async () => {
     const query = document.getElementById('search-query').value.trim();
     const type = document.getElementById('search-type').value;
-    const count = document.getElementById('search-count').value || 20;
+    const countInput = document.getElementById('search-count').value;
+    // Convert to number and ensure minimum of 1
+    const count = Math.max(1, parseInt(countInput, 10) || 20);
     const container = document.getElementById('search-results');
     if (!query) { showError(container, 'Please enter a search query'); return; }
     showLoading(container);
@@ -3210,11 +3212,15 @@ document.getElementById('get-community-about-btn').addEventListener('click', asy
 
 async function doExplore(query, type = 'Top', count = 20, container) {
   try {
-    let data = await fetchFromAPI('/search-v2', { query, type, count });
+    // Ensure count is a number and at least 1
+    const countNum = Math.max(1, parseInt(count, 10) || 20);
+    console.log(`🔍 Searching with count: ${countNum} (original: ${count}, type: ${typeof count})`);
+    
+    let data = await fetchFromAPI('/search-v2', { query, type, count: countNum });
     if (type === 'People') {
       let users = extractUsersFromSearch(data);
       if (!users.length) {
-        data = await fetchFromAPI('/search', { query, type, count });
+        data = await fetchFromAPI('/search', { query, type, count: countNum });
         users = extractUsersFromSearch(data);
       }
       displayUsers(users, container, `People for "${query}"`);
@@ -3222,16 +3228,28 @@ async function doExplore(query, type = 'Top', count = 20, container) {
     }
     let tweets = extractTweetsFromSearchV2(data);
     let usersIndex = buildUsersIndex(data);
+    console.log(`✅ Extracted ${tweets.length} tweets from /search-v2`);
+    
     if (!tweets.length) {
-      data = await fetchFromAPI('/search', { query, type, count });
+      console.log('⚠️ No tweets from /search-v2, trying /search fallback...');
+      data = await fetchFromAPI('/search', { query, type, count: countNum });
       tweets = extractTweetsFromSearchV2(data);
       if (!tweets.length) tweets = extractTweetsLegacy(data);
+      console.log(`✅ Extracted ${tweets.length} tweets from /search fallback`);
       usersIndex = Object.keys(usersIndex).length ? usersIndex : buildUsersIndex(data);
     }
+    
     if (!tweets.length) {
       showWarning(container, 'No results found for this query.');
       return;
     }
+    
+    // Limit results to the requested count (API might return more)
+    if (tweets.length > countNum) {
+      tweets = tweets.slice(0, countNum);
+      console.log(`📊 Limited results to ${countNum} tweets (API returned ${tweets.length})`);
+    }
+    
     renderSearchResults(tweets, container, query, { usersIndex });
   } catch (err) {
     console.error('Explore error:', err);
