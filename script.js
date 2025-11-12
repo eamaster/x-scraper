@@ -184,7 +184,7 @@ function normalizeUser(json) {
     console.log('📊 Normalizing user data. Response keys:', Object.keys(json || {}));
     console.log('📊 Full response structure (first 1000 chars):', JSON.stringify(json, null, 2).substring(0, 1000));
     
-    // Try multiple paths to find user data (Twitter API can return data in various structures)
+    // Try multiple paths to find user data (X API can return data in various structures)
     const candidates = [
         json,
         dget(json, 'result'),
@@ -205,17 +205,17 @@ function normalizeUser(json) {
     let userObj = null;
     
     // First, try to find a user object with legacy property
-    // Note: In new Twitter API, user data is at result.data.user.result
+    // Note: In new X API, user data is at result.data.user.result
     // which has both core (for screen_name/name) and legacy (for metrics)
     for (const c of candidates) {
         if (c && typeof c === 'object') {
             // Check if this candidate has both legacy and core (new API structure)
             if (c.legacy && c.core) {
                 userObj = c;
-                u = c.legacy;
+            u = c.legacy;
                 console.log('✅ Found user with both legacy and core (new API structure)');
-                break;
-            }
+            break;
+        }
             // Check if this candidate has legacy (older API structure)
             if (c.legacy && !userObj) {
                 userObj = c;
@@ -225,7 +225,7 @@ function normalizeUser(json) {
             // Check if this candidate has user.legacy
             if (c.user && c.user.legacy && !userObj) {
                 userObj = c;
-                u = c.user.legacy;
+            u = c.user.legacy;
                 console.log('✅ Found user.user.legacy');
             }
         }
@@ -245,13 +245,13 @@ function normalizeUser(json) {
                         u = c;
                     }
                     console.log('✅ Found user-like object');
-                    break;
+            break;
                 }
             }
         }
     }
 
-    // Check globalObjects (legacy Twitter API format)
+    // Check globalObjects (legacy X API format)
     if (!u && dget(json, 'globalObjects.users')) {
         const users = dget(json, 'globalObjects.users');
         const first = Object.values(users)[0];
@@ -289,7 +289,7 @@ function normalizeUser(json) {
     }
 
     // Extract user data from the found user object
-    // IMPORTANT: In new Twitter API, screen_name is in core, NOT legacy!
+    // IMPORTANT: In new X API, screen_name is in core, NOT legacy!
     // Structure: result.data.user.result.core.screen_name (for username/name)
     //           result.data.user.result.legacy (for metrics like followers_count, statuses_count)
     // So we need to check core first, then fall back to legacy
@@ -366,7 +366,7 @@ function normalizeUser(json) {
     // Extract metrics
     const tweets = dget(u, 'statuses_count') ??
                    dget(userObj, 'statuses_count') ??
-                   dget(json, 'result.data.user.result.legacy.statuses_count') ??
+                       dget(json, 'result.data.user.result.legacy.statuses_count') ??
                    dget(json, 'result.data.user_by_screen_name.result.legacy.statuses_count') ??
                    dget(json, 'user.legacy.statuses_count') ??
                    0;
@@ -1350,12 +1350,12 @@ function extractTweetId(input) {
         return input;
     }
     
-    // Try to extract from Twitter/X URL
+    // Try to extract from X/Twitter URL
     // Patterns: 
-    // - https://twitter.com/username/status/1234567890
     // - https://x.com/username/status/1234567890
-    // - twitter.com/username/status/1234567890
+    // - https://twitter.com/username/status/1234567890 (legacy)
     // - x.com/username/status/1234567890
+    // - twitter.com/username/status/1234567890 (legacy)
     const urlPatterns = [
         /(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/i,
         /\/status\/(\d+)/i,
@@ -1648,7 +1648,7 @@ document.getElementById('get-tweet-btn').addEventListener('click', async () => {
     // Extract tweet ID from input (handles URLs)
     const tweetId = extractTweetId(input);
     if (!tweetId) {
-        showError(container, 'Invalid tweet ID or URL. Please enter a valid tweet ID or URL (e.g., https://twitter.com/username/status/1234567890)');
+        showError(container, 'Invalid tweet ID or URL. Please enter a valid tweet ID or URL (e.g., https://x.com/username/status/1234567890)');
         return;
     }
     
@@ -2272,7 +2272,7 @@ function normalizeList(node) {
   if (node.object_id) {
     id = String(node.object_id).trim();
   } else if (node.url && typeof node.url === 'string') {
-    // Extract ID from URL like "twitter.com/i/lists/76314257"
+    // Extract ID from URL like "x.com/i/lists/76314257" or "twitter.com/i/lists/76314257"
     const match = node.url.match(/lists\/(\d+)/);
     if (match) id = match[1];
   }
@@ -3498,7 +3498,7 @@ document.getElementById('get-trends-btn').addEventListener('click', async () => 
                 <div class="trend-card">
                     <strong>${i + 1}. ${trend.name}</strong>
                     ${trend.tweet_volume ? `<span class="badge badge-count">${formatNumber(trend.tweet_volume)} tweets</span>` : '<span class="badge badge-count">Volume N/A</span>'}
-                    ${trend.url ? `<br><a href="${trend.url}" target="_blank" style="color: #1da1f2;">View on Twitter →</a>` : ''}
+                    ${trend.url ? `<br><a href="${trend.url}" target="_blank" style="color: #1da1f2;">View on X →</a>` : ''}
                 </div>
             `).join('')}`;
     } catch (error) { 
@@ -3964,11 +3964,11 @@ function displayTweets(tweets, container, title, ctx = {}) {
                 dget(node, 'legacy.reply_count') ||
                 0;
             
-            // Format date - handle Twitter date format
+            // Format date - handle X date format
             let dateStr = 'Unknown';
             if (dateRaw) {
                 try {
-                    // Twitter dates are in format: "Tue Nov 30 14:10:47 +0000 2010"
+                    // X dates are in format: "Tue Nov 30 14:10:47 +0000 2010"
                     if (typeof dateRaw === 'string') {
                         if (dateRaw.includes('+0000') || dateRaw.includes('GMT')) {
                             const parsed = new Date(dateRaw);
