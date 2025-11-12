@@ -1123,35 +1123,182 @@ async function getUserNetwork(type) {
     } catch (error) { showError(container, error.message); }
 }
 
-// Universal user extractor
+// Universal user extractor - handles retweets, likes, followers, following, etc.
 function extractUsersFromResponse(data) {
     let users = [];
+    const seenUserIds = new Set();
     
-    // Try structure 1: data.result.timeline.instructions[0].entries
-    const instructions = data.result?.timeline?.instructions || [];
+    // Helper to add user if not already seen
+    const addUser = (user) => {
+        if (!user || typeof user !== 'object') return;
+        const uid = user.rest_id || user.id_str || user.id || 
+                   user.legacy?.id_str || user.legacy?.id ||
+                   user.core?.rest_id || user.core?.id_str;
+        const uidStr = uid ? String(uid) : null;
+        if (uidStr && !seenUserIds.has(uidStr)) {
+            seenUserIds.add(uidStr);
+            users.push(user);
+        } else if (!uidStr && (user.screen_name || user.legacy?.screen_name || user.core?.screen_name)) {
+            // If no ID but has screen_name, add it anyway (dedupe by screen_name)
+            const screenName = user.screen_name || user.legacy?.screen_name || user.core?.screen_name;
+            if (screenName && !seenUserIds.has(screenName)) {
+                seenUserIds.add(screenName);
+                users.push(user);
+            }
+        }
+    };
+    
+    // Try structure 1: data.result.timeline.instructions[].entries
+    const instructions = data.result?.timeline?.instructions || data.timeline?.instructions || [];
+    console.log(`🔍 extractUsersFromResponse: Found ${instructions.length} instructions`);
     if (instructions.length > 0) {
         for (const instruction of instructions) {
-            if (instruction.type === 'TimelineAddEntries' && instruction.entries) {
-                const entries = instruction.entries.filter(entry => 
-                    entry.content?.itemContent?.user_results?.result
-                );
-                users.push(...entries.map(entry => entry.content.itemContent.user_results.result));
+            if (!instruction || typeof instruction !== 'object') continue;
+            // Check all instruction types, not just TimelineAddEntries
+            const entries = instruction.entries || instruction.addEntries || instruction.moduleItems || [];
+            console.log(`🔍 extractUsersFromResponse: Instruction type: ${instruction.type}, entries: ${entries.length}`);
+            
+            for (const entry of entries) {
+                if (!entry || typeof entry !== 'object') continue;
+                
+                // Skip entries that don't look like user entries
+                const entryId = entry.entryId || '';
+                const isUserEntry = entryId.startsWith('user-') || entryId.includes('user');
+                
+                // Try multiple paths to extract user from entry
+                const userPaths = [
+                    // Standard path: entry.content.itemContent.user_results.result
+                    dget(entry, 'content.itemContent.user_results.result'),
+                    // Alternative: entry.content.itemContent.user
+                    dget(entry, 'content.itemContent.user'),
+                    // Alternative: entry.content.user_results.result
+                    dget(entry, 'content.user_results.result'),
+                    // Alternative: entry.content.user
+                    dget(entry, 'content.user'),
+                    // Direct access
+                    entry.content?.itemContent?.user_results?.result,
+                    entry.content?.itemContent?.user,
+                    entry.content?.user_results?.result,
+                    entry.content?.user,
+                    // For timeline modules with items
+                    ...(entry.content?.items || []).map(item => 
+                        dget(item, 'item.itemContent.user_results.result') ||
+                        dget(item, 'itemContent.user_results.result') ||
+                        item.item?.itemContent?.user_results?.result ||
+                        item.itemContent?.user_results?.result
+                    ),
+                ];
+                
+                // Log entry structure for debugging (first few entries only)
+                if (users.length < 5 && (isUserEntry || entry.content?.itemContent)) {
+                    console.log(`🔍 Entry ${entryId} structure:`, {
+                        hasItemContent: !!entry.content?.itemContent,
+                        itemContentKeys: entry.content?.itemContent ? Object.keys(entry.content.itemContent) : [],
+                        hasUserResults: !!entry.content?.itemContent?.user_results,
+                        hasUser: !!entry.content?.itemContent?.user,
+                    });
+                }
+                
+                for (const user of userPaths) {
+                    if (user && typeof user === 'object') {
+                        addUser(user);
+                    }
+                }
+                
+                // Also check if the entry itself is a user (some endpoints return users directly)
+                if (entry.screen_name || entry.legacy?.screen_name || entry.core?.screen_name) {
+                    addUser(entry);
+                }
+                
+                // If entryId starts with "user-", try to extract user from content more aggressively
+                if (isUserEntry && users.length === 0 && entry.content) {
+                    // Try DFS within the entry content
+                    const findUserInEntry = (obj, depth = 0) => {
+                        if (depth > 3 || !obj || typeof obj !== 'object') return null;
+                        if (obj.screen_name || obj.legacy?.screen_name || obj.core?.screen_name) {
+                            if (obj.rest_id || obj.id_str || obj.id || obj.legacy?.id_str) {
+                                return obj;
+                            }
+                        }
+                        for (const value of Object.values(obj)) {
+                            if (value && typeof value === 'object') {
+                                const found = findUserInEntry(value, depth + 1);
+                                if (found) return found;
+                            }
+                        }
+                        return null;
+                    };
+                    const foundUser = findUserInEntry(entry.content);
+                    if (foundUser) {
+                        addUser(foundUser);
+                    }
+                }
             }
         }
     }
     
-    // Try structure 2: data.data
+    // Try structure 2: data.data (direct array or object)
     if (users.length === 0 && data.data) {
         const dataArray = Array.isArray(data.data) ? data.data : Object.values(data.data);
-        users = dataArray.filter(item => item && item.screen_name);
+        for (const item of dataArray) {
+            if (item && typeof item === 'object') {
+                // Check if it's a user object
+                if (item.screen_name || item.legacy?.screen_name || item.core?.screen_name || 
+                    item.user_results?.result || item.user_results) {
+                    const user = item.user_results?.result || item.user_results || item;
+                    addUser(user);
+                }
+            }
+        }
     }
     
-    // Try structure 3: direct timeline
-    if (users.length === 0 && data.timeline) {
-        users = Array.isArray(data.timeline) ? data.timeline : [];
+    // Try structure 3: globalObjects.users (legacy format)
+    const globalUsers = dget(data, 'globalObjects.users') || data.globalObjects?.users;
+    if (globalUsers && typeof globalUsers === 'object') {
+        for (const user of Object.values(globalUsers)) {
+            addUser(user);
+        }
     }
     
-    return users.filter(u => u); // Remove null/undefined
+    // Try structure 4: direct timeline array
+    if (users.length === 0 && data.timeline && Array.isArray(data.timeline)) {
+        for (const item of data.timeline) {
+            if (item && typeof item === 'object') {
+                addUser(item);
+            }
+        }
+    }
+    
+    // Try structure 5: DFS search for user-like objects
+    if (users.length === 0) {
+        const findUsers = (obj, depth = 0) => {
+            if (depth > 5 || !obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+            
+            // Check if this object is a user
+            if (obj.screen_name || obj.legacy?.screen_name || obj.core?.screen_name) {
+                if (obj.rest_id || obj.id_str || obj.id || obj.legacy?.id_str) {
+                    addUser(obj);
+                }
+            }
+            
+            // Recursively search nested objects
+            for (const value of Object.values(obj)) {
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    findUsers(value, depth + 1);
+                } else if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (item && typeof item === 'object') {
+                            findUsers(item, depth + 1);
+                        }
+                    }
+                }
+            }
+        };
+        findUsers(data);
+    }
+    
+    console.log(`✅ extractUsersFromResponse: Found ${users.length} users`);
+    return users.filter(u => u && typeof u === 'object'); // Remove null/undefined
 }
 
 document.getElementById('get-user-tweets-btn').addEventListener('click', () => getUserContent('tweets'));
@@ -1676,17 +1823,26 @@ async function getTweetInteractions(type) {
         const data = await fetchFromAPI(endpoints[type], params);
         console.log(`📊 ${type} response:`, data);
         
-        if (type === 'likes') {
+        // Handle retweets and likes - these endpoints return users, not tweets
+        if (type === 'likes' || type === 'retweets') {
             const users = extractUsersFromResponse(data);
             console.log(`✅ Extracted ${users.length} users for ${type}`);
+            if (users.length === 0) {
+                showWarning(container, `No ${type} found for this tweet.`);
+                return;
+            }
             displayUsers(users, container, type.charAt(0).toUpperCase() + type.slice(1));
         } else {
+            // Comments and quotes return tweets, not users
             // Build users index for author resolution
             const usersIdx = buildUsersIndexDeep(data);
             console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
             
-            // Extract users from tweets
+            // Extract tweets from response
             const tweets = extractTweetsFromResponse(data);
+            console.log(`🔬 Extracting tweets from ${type} response`);
+            
+            // Extract users from tweets and merge into usersIdx
             for (const tweet of tweets) {
                 const t = tweet?.result || tweet;
                 const userPaths = [
@@ -1709,6 +1865,10 @@ async function getTweetInteractions(type) {
             }
             
             console.log(`✅ Extracted ${tweets.length} tweets for ${type}`);
+            if (tweets.length === 0) {
+                showWarning(container, `No ${type} found for this tweet.`);
+                return;
+            }
             displayTweets(tweets, container, type.charAt(0).toUpperCase() + type.slice(1), { usersIndex: usersIdx });
         }
     } catch (error) {
