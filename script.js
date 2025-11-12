@@ -524,7 +524,9 @@ function showError(container, message) {
 }
 
 function showWarning(container, message) {
-    showError(container, message);
+    container.innerHTML = `<div class="alert alert-warning" style="background-color: #fff3cd; border: 1px solid #ffc107; color: #856404; padding: 12px; border-radius: 4px; margin: 10px 0;">
+        <strong>⚠️ Warning:</strong> ${esc(message)}
+    </div>`;
 }
 
 function renderUserCard(user, container) {
@@ -772,16 +774,83 @@ async function getUserContent(type) {
         const userData = await fetchFromAPI('/user', { username });
         const userId = userData.result?.data?.user?.result?.rest_id || userData.result?.id_str;
         if (!userId) throw new Error('Could not get user ID');
+        
+        console.log(`🔍 Fetching ${type} for user ID: ${userId}`);
         const data = await fetchFromAPI(endpoints[type], { user: userId, count });
         
         console.log(`🔍 ${type} response structure:`, Object.keys(data), data);
+        console.log(`🔍 ${type} full response (first 2000 chars):`, JSON.stringify(data, null, 2).substring(0, 2000));
+        
+        // Special handling for likes endpoint (deprecated, might have empty timeline_v2)
+        if (type === 'likes') {
+            // Check if the response indicates the endpoint is deprecated or unavailable
+            if (data.error || data.errors) {
+                throw new Error(data.message || data.errors?.[0]?.message || 'Likes endpoint is unavailable');
+            }
+            // Check if timeline_v2 exists but is empty
+            const timelineV2 = dget(data, 'data.user.result.timeline_v2') || 
+                              data.data?.user?.result?.timeline_v2 ||
+                              data.result?.timeline_v2;
+            if (timelineV2 && typeof timelineV2 === 'object' && Object.keys(timelineV2).length === 0) {
+                console.warn('⚠️ timeline_v2 is empty - endpoint might be deprecated or unavailable');
+                showWarning(container, 'The user-likes endpoint is deprecated and may not return data. User likes are not publicly available through this API.');
+                return;
+            }
+        }
         
         // Extract tweets - try multiple possible structures
         let tweets = extractTweetsFromResponse(data);
         
         console.log(`✅ Extracted ${tweets.length} tweets for ${type}`);
-        displayTweets(tweets, container, `${type.charAt(0).toUpperCase() + type.slice(1)} from @${username}`);
-    } catch (error) { showError(container, error.message); }
+        
+        if (tweets.length === 0) {
+            if (type === 'likes') {
+                showWarning(container, 'No likes found. The user-likes endpoint is deprecated and may not work. User likes are not publicly available through this API.');
+            } else {
+                showWarning(container, `No ${type} found for this user.`);
+            }
+            return;
+        }
+        
+        // Build users index for author resolution
+        const usersIdx = buildUsersIndexDeep(data);
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users for ${type}`);
+        
+        // Extract users from tweets themselves and merge into usersIdx
+        for (const tweet of tweets) {
+            const t = tweet?.result || tweet;
+            const userPaths = [
+                dget(t, 'core.user_results.result'),
+                dget(t, 'user_results.result'),
+                dget(t, 'user'),
+                dget(t, 'legacy.user'),
+                t.core?.user_results?.result,
+                t.user_results?.result,
+                t.user,
+                t.legacy?.user,
+            ];
+            for (const user of userPaths) {
+                if (!user) continue;
+                const legacy = user.legacy || user;
+                const uid = user.rest_id || legacy.id_str || user.id_str || user.id;
+                const uidStr = uid ? String(uid) : null;
+                if (uidStr && (legacy.screen_name || user.screen_name || user.core?.screen_name)) {
+                    if (!usersIdx[uidStr]) {
+                        usersIdx[uidStr] = legacy;
+                        const uidNum = Number(uidStr);
+                        if (!isNaN(uidNum) && uidNum.toString() === uidStr && !usersIdx[uidNum]) {
+                            usersIdx[uidNum] = legacy;
+                        }
+                    }
+                }
+            }
+        }
+        
+        displayTweets(tweets, container, `${type.charAt(0).toUpperCase() + type.slice(1)} from @${username}`, { usersIndex: usersIdx });
+    } catch (error) { 
+        console.error(`❌ Error fetching ${type}:`, error);
+        showError(container, error.message); 
+    }
 }
 
 // DFS fallback to find tweets in any nesting
@@ -817,10 +886,125 @@ function extractTweetsFromResponse(data) {
     console.log('🔬 Extracting tweets from data with keys:', Object.keys(data));
     console.log('🔬 Full data structure:', JSON.stringify(data, null, 2).substring(0, 500));
     
+    // Try structure 0: data.user.result.timeline_v2 (for user-likes endpoint - deprecated)
+    // Also check data.result.timeline_v2 as alternative structure
+    const timelineV2Paths = [
+        dget(data, 'data.user.result.timeline_v2'),
+        dget(data, 'data.user.result.timeline_v2.timeline'),
+        data.data?.user?.result?.timeline_v2,
+        data.result?.timeline_v2,
+        data.timeline_v2
+    ].filter(Boolean);
+    
+    for (const timelineV2 of timelineV2Paths) {
+        if (timelineV2 && typeof timelineV2 === 'object') {
+            console.log('📋 Found timeline_v2 structure');
+            console.log('📋 timeline_v2 keys:', Object.keys(timelineV2));
+            console.log('📋 timeline_v2 structure (first 500 chars):', JSON.stringify(timelineV2, null, 2).substring(0, 500));
+            
+            // Check if timeline_v2 is empty (deprecated endpoint)
+            if (Object.keys(timelineV2).length === 0) {
+                console.warn('⚠️ timeline_v2 is empty - endpoint is deprecated');
+                continue; // Try other paths
+            }
+            
+            // Check if timeline_v2 has instructions (nested timeline)
+            const nestedTimeline = timelineV2.timeline;
+            const v2Instructions = timelineV2.instructions || 
+                                   nestedTimeline?.instructions || 
+                                   [];
+            
+            if (v2Instructions.length > 0) {
+                console.log(`📋 Found ${v2Instructions.length} instructions in timeline_v2`);
+                for (const instruction of v2Instructions) {
+                    if (!instruction || typeof instruction !== 'object') continue;
+                    const candEntries =
+                        instruction.entries ||
+                        instruction.addEntries ||
+                        instruction.moduleItems ||
+                        [];
+                    if (Array.isArray(candEntries) && candEntries.length) {
+                        console.log(`  - Checking ${candEntries.length} candidate entries in timeline_v2`);
+                        for (const e of candEntries) {
+                            if (!e || typeof e !== 'object') continue;
+                            const tweetNode = 
+                                e.content?.itemContent?.tweet_results?.result ||
+                                e.content?.itemContent?.tweet_results ||
+                                e.content?.itemContent?.tweet ||
+                                e.content?.tweet_results?.result ||
+                                e.content?.tweet_results ||
+                                e.tweet_results?.result ||
+                                e.tweet_results ||
+                                (e.content?.itemContent?.tweetDisplayType === 'Tweet' ? e.content?.itemContent : null);
+                            
+                            if (tweetNode) {
+                                let final = tweetNode.result || tweetNode;
+                                if (final.tweet) {
+                                    final = final.tweet.result || final.tweet;
+                                }
+                                if (final && (final.legacy || final.full_text || final.text || final.__typename === 'Tweet')) {
+                                    tweets.push(final);
+                                }
+                            }
+                        }
+                        console.log(`  - Extracted ${tweets.length} tweets from timeline_v2`);
+                    }
+                }
+                if (tweets.length > 0) break; // Found tweets, stop searching
+            } else {
+                // Check if timeline_v2 has other structures
+                console.log('⚠️ timeline_v2 has no instructions. Checking alternative structures...');
+                
+                // Check for tweets array directly
+                if (timelineV2.tweets && Array.isArray(timelineV2.tweets) && timelineV2.tweets.length > 0) {
+                    console.log(`  - Found ${timelineV2.tweets.length} tweets directly in timeline_v2`);
+                    tweets = timelineV2.tweets;
+                    break;
+                }
+                
+                // Check for entries array
+                if (timelineV2.entries && Array.isArray(timelineV2.entries) && timelineV2.entries.length > 0) {
+                    console.log(`  - Found ${timelineV2.entries.length} entries in timeline_v2`);
+                    // Process entries similar to instructions
+                    for (const e of timelineV2.entries) {
+                        if (!e || typeof e !== 'object') continue;
+                        const tweetNode = 
+                            e.content?.itemContent?.tweet_results?.result ||
+                            e.content?.itemContent?.tweet_results ||
+                            e.content?.itemContent?.tweet ||
+                            e.content?.tweet_results?.result ||
+                            e.tweet_results?.result;
+                        if (tweetNode) {
+                            let final = tweetNode.result || tweetNode;
+                            if (final && (final.legacy || final.full_text || final.text || final.__typename === 'Tweet')) {
+                                tweets.push(final);
+                            }
+                        }
+                    }
+                    if (tweets.length > 0) break;
+                }
+                
+                // Check for any nested structures that might contain tweets
+                for (const [key, value] of Object.entries(timelineV2)) {
+                    if (Array.isArray(value) && value.length > 0) {
+                        console.log(`  - Found array at timeline_v2.${key} with ${value.length} items`);
+                        // Check if it looks like tweets
+                        if (value[0] && (value[0].__typename === 'Tweet' || value[0].legacy || value[0].full_text)) {
+                            console.log(`  - Looks like tweets! Using array from timeline_v2.${key}`);
+                            tweets = value;
+                            break;
+                        }
+                    }
+                }
+                if (tweets.length > 0) break;
+            }
+        }
+    }
+    
     // Try structure 1: data.result.timeline.instructions
     const instructions = data.result?.timeline?.instructions || [];
     console.log(`📋 Found ${instructions.length} instructions`);
-    if (instructions.length > 0) {
+    if (instructions.length > 0 && tweets.length === 0) {
         for (const instruction of instructions) {
             console.log(`  - Instruction type: ${instruction.type || 'unknown'}`);
             const candEntries =
