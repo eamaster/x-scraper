@@ -1931,78 +1931,118 @@ document.getElementById('get-community-about-btn').addEventListener('click', asy
         const data = await fetchFromAPI('/community-about', { communityId });
         console.log('📊 Community about response:', Object.keys(data || {}));
         
-        // Try to format the about data similar to details
-        // The structure might be similar to community-details
-        const about = dget(data, 'result.result') || dget(data, 'result') || dget(data, 'data') || data;
+        // The About endpoint returns timeline instructions with moderators and members
+        const instructions = dget(data, 'result.timeline.instructions') || [];
+        const moderators = [];
+        const members = [];
         
-        // Check if it's a structured response similar to details
-        if (about && typeof about === 'object' && (about.name || about.description || about.community)) {
-            const community = about.community || about;
-            const name = community.name || about.name || 'Community';
-            const desc = community.description || about.description || '';
-            const members = community.member_count || about.member_count || 0;
-            const isMember = community.is_member || about.is_member || false;
-            const role = community.role || about.role || 'NonMember';
-            const joinPolicy = community.join_policy || about.join_policy || 'Unknown';
-            const createdAt = community.created_at || about.created_at;
-            const isNSFW = community.is_nsfw || about.is_nsfw || false;
-            const primaryTopic = dget(community, 'primary_community_topic.topic_name') || dget(about, 'primary_community_topic.topic_name') || '';
-            const creator = dget(community, 'creator_results.result.legacy.screen_name') || dget(about, 'creator_results.result.legacy.screen_name') || '';
-            const rules = community.rules || about.rules || [];
-            const customBanner = dget(community, 'custom_banner_media.media_info.original_img_url') || dget(about, 'custom_banner_media.media_info.original_img_url') || '';
-            const defaultBanner = dget(community, 'default_banner_media.media_info.original_img_url') || dget(about, 'default_banner_media.media_info.original_img_url') || '';
-            const bannerUrl = customBanner || defaultBanner;
-            
-            // Format created date
-            let createdDateStr = '';
-            if (createdAt) {
-                try {
-                    const date = new Date(Number(createdAt));
-                    createdDateStr = date.toLocaleDateString('en-US', { 
-                        year: 'numeric', 
-                        month: 'long', 
-                        day: 'numeric' 
-                    });
-                } catch (e) {
-                    createdDateStr = '';
+        // Extract moderators and members from timeline instructions
+        for (const ins of instructions) {
+            if (ins.type === 'TimelineAddEntries' && ins.entries) {
+                for (const entry of ins.entries) {
+                    if (entry.entryId === 'communityModerators' && entry.content?.items) {
+                        for (const item of entry.content.items) {
+                            const user = dget(item, 'item.itemContent.user_results.result');
+                            if (user && user.legacy) {
+                                moderators.push({
+                                    rest_id: user.rest_id || user.legacy.id_str || user.id,
+                                    legacy: user.legacy
+                                });
+                            }
+                        }
+                    } else if (entry.entryId === 'communityMembers' && entry.content?.items) {
+                        for (const item of entry.content.items) {
+                            const user = dget(item, 'item.itemContent.user_results.result');
+                            if (user && user.legacy) {
+                                members.push({
+                                    rest_id: user.rest_id || user.legacy.id_str || user.id,
+                                    legacy: user.legacy
+                                });
+                            }
+                        }
+                    }
                 }
             }
-            
-            container.innerHTML = `
-                <div class="community-card" style="padding: 16px;">
-                    ${bannerUrl ? `<img src="${esc(bannerUrl)}" alt="Community banner" style="width: 100%; max-height: 200px; object-fit: cover; border-radius: 8px; margin-bottom: 16px;">` : ''}
-                    <h3 style="margin: 0 0 8px 0;">${esc(name)} <small style="opacity:.7; font-weight: normal;">(${esc(communityId)})</small></h3>
-                    ${desc ? `<p style="color: #65676b; margin: 8px 0;">${esc(desc)}</p>` : ''}
-                    <div class="tweet-footer" style="margin: 12px 0;">
-                        <span>👥 ${formatNumber(members)} members</span>
-                        ${primaryTopic ? `<span>🏷️ ${esc(primaryTopic)}</span>` : ''}
-                        ${isNSFW ? '<span style="color: #e0245e;">🔞 NSFW</span>' : ''}
-                        ${isMember ? `<span style="color: #1da1f2;">✓ Member</span>` : `<span style="color: #657786;">Not a member</span>`}
-                    </div>
-                    <div style="margin: 12px 0; padding: 12px; background: #f7f9fa; border-radius: 8px;">
-                        <div style="margin-bottom: 8px;"><strong>Join Policy:</strong> ${esc(joinPolicy)}</div>
-                        ${creator ? `<div style="margin-bottom: 8px;"><strong>Creator:</strong> @${esc(creator)}</div>` : ''}
-                        ${createdDateStr ? `<div style="margin-bottom: 8px;"><strong>Created:</strong> ${esc(createdDateStr)}</div>` : ''}
-                        ${role ? `<div><strong>Your Role:</strong> ${esc(role)}</div>` : ''}
-                    </div>
-                    ${rules.length > 0 ? `
-                        <div style="margin: 12px 0;">
-                            <strong style="display: block; margin-bottom: 8px;">Community Rules (${rules.length}):</strong>
-                            <ul style="margin: 0; padding-left: 20px; color: #65676b;">
-                                ${rules.map(rule => `<li>${esc(rule.name || 'Unnamed rule')}</li>`).join('')}
-                            </ul>
-                        </div>
-                    ` : ''}
-                    <details style="margin-top:16px;">
-                        <summary style="cursor: pointer; color: #1da1f2; user-select: none;">📋 View Raw JSON</summary>
-                        <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; background: #f7f9fa; padding: 12px; border-radius: 4px; font-size: 12px;">${esc(JSON.stringify(data, null, 2))}</pre>
-                    </details>
-                </div>
-            `;
-        } else {
-            // Fallback to generic display if structure is different
-            displayGenericResults(data, container, 'About Community');
         }
+        
+        console.log(`👥 Extracted ${moderators.length} moderators and ${members.length} members from About`);
+        
+        // Display formatted information
+        let html = `<div class="community-card" style="padding: 16px;">`;
+        html += `<h3 style="margin: 0 0 16px 0;">About Community <small style="opacity:.7; font-weight: normal;">(${esc(communityId)})</small></h3>`;
+        
+        if (moderators.length > 0) {
+            html += `<div style="margin-bottom: 24px;">`;
+            html += `<h4 style="margin: 0 0 12px 0; color: #1da1f2;">👮 Moderators (${moderators.length})</h4>`;
+            html += `<div style="display: grid; gap: 12px;">`;
+            for (const mod of moderators) {
+                const legacy = mod.legacy || {};
+                html += `<div class="user-card" style="padding: 12px; border: 1px solid #e1e8ed; border-radius: 8px;">`;
+                html += `<div style="display: flex; align-items: center; gap: 12px;">`;
+                if (legacy.profile_image_url_https) {
+                    html += `<img src="${esc(legacy.profile_image_url_https)}" alt="" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;">`;
+                }
+                html += `<div style="flex: 1;">`;
+                html += `<strong>@${esc(legacy.screen_name || 'unknown')}</strong> ${legacy.verified ? '<span class="badge badge-verified">✓</span>' : ''}`;
+                html += `<div style="color: #657786; font-size: 14px; margin-top: 4px;">${esc(legacy.name || '')}</div>`;
+                if (legacy.description) {
+                    html += `<div style="color: #657786; font-size: 13px; margin-top: 4px;">${esc(legacy.description)}</div>`;
+                }
+                html += `<div class="tweet-footer" style="margin-top: 8px;">`;
+                html += `<span>👥 ${formatNumber(legacy.followers_count || 0)} followers</span>`;
+                html += `<span>📝 ${formatNumber(legacy.statuses_count || 0)} tweets</span>`;
+                html += `</div>`;
+                html += `</div>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+            html += `</div>`;
+        }
+        
+        if (members.length > 0) {
+            html += `<div style="margin-bottom: 24px;">`;
+            html += `<h4 style="margin: 0 0 12px 0; color: #1da1f2;">👥 Members (${members.length})</h4>`;
+            html += `<div style="display: grid; gap: 12px;">`;
+            for (const mem of members.slice(0, 20)) { // Show first 20 members
+                const legacy = mem.legacy || {};
+                html += `<div class="user-card" style="padding: 12px; border: 1px solid #e1e8ed; border-radius: 8px;">`;
+                html += `<div style="display: flex; align-items: center; gap: 12px;">`;
+                if (legacy.profile_image_url_https) {
+                    html += `<img src="${esc(legacy.profile_image_url_https)}" alt="" style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;">`;
+                }
+                html += `<div style="flex: 1;">`;
+                html += `<strong>@${esc(legacy.screen_name || 'unknown')}</strong> ${legacy.verified ? '<span class="badge badge-verified">✓</span>' : ''}`;
+                html += `<div style="color: #657786; font-size: 14px; margin-top: 4px;">${esc(legacy.name || '')}</div>`;
+                if (legacy.description) {
+                    html += `<div style="color: #657786; font-size: 13px; margin-top: 4px;">${esc(legacy.description)}</div>`;
+                }
+                html += `<div class="tweet-footer" style="margin-top: 8px;">`;
+                html += `<span>👥 ${formatNumber(legacy.followers_count || 0)} followers</span>`;
+                html += `<span>📝 ${formatNumber(legacy.statuses_count || 0)} tweets</span>`;
+                html += `</div>`;
+                html += `</div>`;
+                html += `</div>`;
+                html += `</div>`;
+            }
+            if (members.length > 20) {
+                html += `<p style="color: #657786; margin-top: 12px;">... and ${members.length - 20} more members</p>`;
+            }
+            html += `</div>`;
+            html += `</div>`;
+        }
+        
+        if (moderators.length === 0 && members.length === 0) {
+            html += `<p style="color: #657786;">No moderators or members data available.</p>`;
+        }
+        
+        html += `<details style="margin-top:16px;">`;
+        html += `<summary style="cursor: pointer; color: #1da1f2; user-select: none;">📋 View Raw JSON</summary>`;
+        html += `<pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; background: #f7f9fa; padding: 12px; border-radius: 4px; font-size: 12px;">${esc(JSON.stringify(data, null, 2))}</pre>`;
+        html += `</details>`;
+        html += `</div>`;
+        
+        container.innerHTML = html;
     } catch (err) {
         console.error('Community about error:', err);
         const errorMsg = err.message || 'Could not load community about.';
