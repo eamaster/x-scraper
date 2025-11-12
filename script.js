@@ -862,25 +862,164 @@ function resolveTopicIds(keyword, topics){
 
 function extractCommunitiesFromResponse(json) {
   const out = [];
+  const seenIds = new Set(); // Track IDs to avoid duplicates
   
   console.log('🔍 Extracting communities from response with keys:', Object.keys(json || {}));
-  console.log('🔍 Sample response structure:', JSON.stringify(json, null, 2).substring(0, 1000));
 
-  const pushNorm = (raw) => {
+  const pushNorm = (raw, context = '') => {
     if (!raw) return;
     const r = raw.community || raw.community_results?.result || raw.result || raw;
     if (!r || typeof r !== 'object') return;
+    
+    // Skip community rules - they have __typename === 'CommunityRule' or are in a rules array
+    if (r.__typename === 'CommunityRule' || context === 'rules') {
+      return;
+    }
     
     // Try multiple ID paths - must be numeric
     const idRaw = r.community_id || r.rest_id || r.id_str || r.id || r.object_id;
     const id = idRaw ? String(idRaw).trim() : '';
     // Only accept numeric IDs
     if (id && !/^\d+$/.test(id)) {
-      console.log('⚠️ Skipping community with non-numeric ID:', id);
       return;
     }
     
+    // Skip if we've already seen this ID
+    if (id && seenIds.has(id)) {
+      return;
+    }
+    
+    // Must be an actual community
+    // Priority 1: Has __typename === 'Community' (definite community)
+    // Priority 2: From communities_search_slice context (we know these are communities from the API structure)
+    // Priority 3: Has description AND (member_count or access field) - communities have these, rules don't
+    const isActualCommunity = 
+      r.__typename === 'Community' || 
+      context === 'communities_search_slice' ||
+      (context && r.description && (r.member_count !== undefined || r.members_count !== undefined || r.access));
+    
+    // In contexts other than communities_search_slice, be very strict
+    if (!isActualCommunity) {
+      if (context === 'deepscan') {
+        // Deep scan: only accept if __typename === 'Community'
+        if (r.__typename !== 'Community') {
+          return;
+        }
+      } else if (context && context !== 'communities_search_slice') {
+        // Other contexts: must have __typename === 'Community' or clear community indicators
+        if (r.__typename !== 'Community' && !(r.description && (r.member_count !== undefined || r.access))) {
+          return;
+        }
+      } else if (!context) {
+        // No context: must be explicit
+        if (r.__typename !== 'Community') {
+          return;
+        }
+      } else {
+        // Not a community
+        return;
+      }
+    }
+    
     const name = r.name || r.community_name || r.display_name || r.topic || r.title || 'Community';
+    
+    // Filter out common rule names that might slip through (with or without trailing punctuation)
+    const ruleNames = [
+      'Explore and share',
+      'Keep posts on topic',
+      'Keep Tweets on topic',
+      'Be kind and respectful',
+      'No spam',
+      'No self-promotion',
+      'Turn on notifications',
+      'Turn on Notifications',
+      "Don't spread",
+      "Keep tweets",
+      'Stay on topic',
+      'Provide English',
+      'No Rage',
+      'No Politics',
+      'No Racism',
+      'No Nude',
+      'Must Be',
+      'Report any',
+      "Don't be",
+      "Don't ask",
+      'No doxxing',
+      'No hate',
+      'Keep tweets related',
+      'Skor tahmin',
+      'Sorduğunuz',
+      'Her türlü',
+      'Kışkırtıcı',
+      'Reklam',
+      'Küfür',
+      'Tweetlerde',
+      'Siyasetle',
+      'FM dışı',
+      'Publikuj',
+      'Komunikuj',
+      'Pomagaj',
+      'Bez spamu',
+      'Legit check',
+      'Cringe',
+      'No unapproved',
+      'No Hudl',
+      'No Sexually',
+      'No unapproved soliciting',
+      'No quote tweeting',
+      'No sensitive media',
+      'No Nude or Sexual',
+      'Must Be an Ohio State Fan',
+      'College Football',
+      'No Hudl Self Promotion',
+      'Report any posts',
+      'No Sexually Explicit',
+      'Quoted tweet has been removed',
+      "Don't spread misinformation",
+      'No self-promotion or cross-posting',
+      'DM mods about hidden tweets',
+      "Don't spam unnecessary tweets",
+      "Don't ask for money",
+      'No doxxing or impersonation',
+      'Keep tweets related to KSI',
+      'No hate or negativity',
+      'Tweetlerde konuyla alakasız',
+      'Siyasetle alakalı paylaşım yasaktır',
+      'FM dışı konularla alakalı',
+      'Skor tahmin gönderileri paylaşmak yasaktır',
+      'Sorduğunuz sorunun cevabını almışsanız gizliyoruz',
+      'Her türlü illegal içerik',
+      'Kışkırtıcı paylaşımlar yasaktır',
+      'Spam yapmayın',
+      'Reklam yapmak yasaktır',
+      'Küfür, hakaret, aşağılayıcı söz',
+      'Publikuj wpisy na temat',
+      'Komunikuj się życzliwie',
+      'Pomagaj innym',
+      'Bez spamu',
+      'Legit check',
+      'Platform Manipulation',
+      'No Unnecessary Negative Posts',
+      "Don't Spread Misinformation",
+      'No Spam Or Self-Promotion',
+      'Keep Tweets On Topic',
+      'Be Kind And Respectful',
+      'Welcome All Arsenal Fans'
+    ];
+    
+    // Check if name matches any rule name (case-insensitive, with optional trailing punctuation)
+    const nameLower = name.toLowerCase().replace(/[.!?]+$/, '').trim();
+    if (ruleNames.some(rule => nameLower === rule.toLowerCase() || nameLower.startsWith(rule.toLowerCase() + ' '))) {
+      console.log(`  ⚠️ Skipping rule: "${name}"`);
+      return;
+    }
+    
+    // Additional check: if name is very short and doesn't look like a community name, skip it
+    if (name.length < 3 || name === 'Community') {
+      return;
+    }
+    
     const desc = r.description || r.summary || r.bio || '';
     const members =
       r.member_count ?? r.members_count ?? r.stats?.member_count ?? r.members ?? 0;
@@ -891,20 +1030,42 @@ function extractCommunitiesFromResponse(json) {
       r.profile_image_url ||
       '';
 
-    if (id || name !== 'Community') {
+    // Only add if it has an ID and looks like a real community
+    if (id && name && name !== 'Community') {
+      seenIds.add(id);
       out.push({ id, name, desc, members, avatar });
-      console.log(`  ✓ Added community: "${name}" (ID: ${id || 'none'})`);
+      console.log(`  ✓ Added community: "${name}" (ID: ${id})`);
     }
   };
 
-  // 1) Direct arrays at root level
+  // 1) PRIORITY: communities_search_slice.items (the main search results structure)
+  const searchSlice = json?.result?.communities_search_slice?.items;
+  if (Array.isArray(searchSlice) && searchSlice.length > 0) {
+    console.log(`📋 Found ${searchSlice.length} items in communities_search_slice.items`);
+    for (const item of searchSlice) {
+      // Each item structure: { rest_id: "...", result: { __typename: "Community", ... } }
+      if (item.result && item.result.__typename === 'Community') {
+        // This is definitely a community
+        pushNorm(item.result, 'communities_search_slice');
+      } else if (item.rest_id && item.result && typeof item.result === 'object') {
+        // Has rest_id and result object - likely a community
+        // But double-check it's not a rule by checking if it has description (communities usually do)
+        if (item.result.description || item.result.member_count !== undefined) {
+          pushNorm(item.result, 'communities_search_slice');
+        }
+      }
+    }
+    console.log(`✅ Extracted ${out.length} communities from search slice`);
+  }
+
+  // 2) Direct arrays at root level
   const direct = json?.result?.communities || json?.communities || json?.list || json?.data?.communities;
   if (Array.isArray(direct) && direct.length > 0) {
     console.log(`📋 Found ${direct.length} communities in direct array`);
-    direct.forEach(pushNorm);
+    direct.forEach(item => pushNorm(item, 'direct'));
   }
 
-  // 2) Timeline instructions
+  // 3) Timeline instructions
   const ins = json?.result?.timeline?.instructions || [];
   if (ins.length > 0) {
     console.log(`📋 Found ${ins.length} timeline instructions`);
@@ -918,12 +1079,12 @@ function extractCommunitiesFromResponse(json) {
         const c4 = e?.content?.community;
         const c5 = e?.community_results?.result;
         const c6 = e?.community;
-        [c1, c2, c3, c4, c5, c6].forEach(pushNorm);
+        [c1, c2, c3, c4, c5, c6].forEach(c => pushNorm(c, 'timeline'));
       }
     }
   }
 
-  // 3) Check for communities in data.result structure
+  // 4) Check for communities in data.result structure (but skip if we already found some)
   if (!out.length && json?.result) {
     console.log('🔍 Checking result structure...');
     // Try various result paths
@@ -936,37 +1097,34 @@ function extractCommunitiesFromResponse(json) {
     for (const path of resultPaths) {
       if (Array.isArray(path)) {
         console.log(`📋 Found ${path.length} communities in result path`);
-        path.forEach(pushNorm);
+        path.forEach(item => pushNorm(item, 'result'));
       } else if (path && typeof path === 'object') {
-        pushNorm(path);
+        pushNorm(path, 'result');
       }
     }
   }
 
-  // 4) Deep scan for obvious arrays of communities
+  // 5) Deep scan for obvious arrays of communities (only if we haven't found any yet)
   if (!out.length) {
     console.log('🔍 Using deep scan for communities...');
     const stack = [json];
     const visited = new WeakSet();
-    while (stack.length) {
+    while (stack.length && out.length < 100) { // Limit to prevent infinite loops
       const cur = stack.pop();
       if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
       visited.add(cur);
       
-      // Check if this object looks like a community
-      const looksLikeCommunity =
-        ('community_id' in cur && /^\d+$/.test(String(cur.community_id))) ||
-        ('community' in cur) ||
-        ('community_results' in cur) ||
-        (cur?.__typename === 'Community') ||
-        (cur?.rest_id && /^\d+$/.test(String(cur.rest_id)) && (cur.name || cur.community_name));
-        
-      if (looksLikeCommunity) {
-        pushNorm(cur);
+      // Only accept objects with __typename === 'Community'
+      if (cur.__typename === 'Community' && cur.rest_id && /^\d+$/.test(String(cur.rest_id))) {
+        pushNorm(cur, 'deepscan');
       }
       
-      // Walk children
-      for (const v of Object.values(cur)) {
+      // Walk children, but skip rules arrays
+      for (const [key, v] of Object.entries(cur)) {
+        if (key === 'rules' && Array.isArray(v)) {
+          // Skip rules - they're not communities
+          continue;
+        }
         if (Array.isArray(v)) {
           for (const item of v) {
             if (item && typeof item === 'object' && !visited.has(item)) {
@@ -1488,9 +1646,10 @@ document.getElementById('get-community-details-btn').addEventListener('click', a
             return;
         }
         const details = await fetchFromAPI('/community-details', { communityId });
-        const name = dget(details, 'result.name') || dget(details, 'result.community.name') || 'Community';
-        const desc = dget(details, 'result.description') || dget(details, 'result.community.description') || '';
-        const members = dget(details, 'result.member_count') || dget(details, 'result.stats.member_count') || 0;
+        // The response structure is: result.result.name, result.result.member_count, etc.
+        const name = dget(details, 'result.result.name') || dget(details, 'result.name') || dget(details, 'result.community.name') || 'Community';
+        const desc = dget(details, 'result.result.description') || dget(details, 'result.description') || dget(details, 'result.community.description') || '';
+        const members = dget(details, 'result.result.member_count') || dget(details, 'result.member_count') || dget(details, 'result.stats.member_count') || 0;
         container.innerHTML = `
       <h3>${esc(name)} <small style="opacity:.7">(${esc(communityId)})</small></h3>
       ${desc ? `<p>${esc(desc)}</p>` : ''}
