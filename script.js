@@ -1239,7 +1239,9 @@ function extractUsersFromResponse(data) {
     
     // Try structure 2: data.data (direct array or object)
     if (users.length === 0 && data.data) {
+        console.log('🔍 Trying data.data structure');
         const dataArray = Array.isArray(data.data) ? data.data : Object.values(data.data);
+        console.log(`🔍 data.data is array: ${Array.isArray(data.data)}, length: ${dataArray.length}`);
         for (const item of dataArray) {
             if (item && typeof item === 'object') {
                 // Check if it's a user object
@@ -1255,6 +1257,7 @@ function extractUsersFromResponse(data) {
     // Try structure 3: globalObjects.users (legacy format)
     const globalUsers = dget(data, 'globalObjects.users') || data.globalObjects?.users;
     if (globalUsers && typeof globalUsers === 'object') {
+        console.log(`🔍 Found globalObjects.users with ${Object.keys(globalUsers).length} users`);
         for (const user of Object.values(globalUsers)) {
             addUser(user);
         }
@@ -1262,10 +1265,30 @@ function extractUsersFromResponse(data) {
     
     // Try structure 4: direct timeline array
     if (users.length === 0 && data.timeline && Array.isArray(data.timeline)) {
+        console.log(`🔍 Trying data.timeline array, length: ${data.timeline.length}`);
         for (const item of data.timeline) {
             if (item && typeof item === 'object') {
                 addUser(item);
             }
+        }
+    }
+    
+    // Try structure 5: data.result (direct result object, might contain users)
+    if (users.length === 0 && data.result && typeof data.result === 'object' && !data.result.timeline) {
+        console.log('🔍 Trying data.result structure (no timeline)');
+        // Check if result itself contains user-like objects
+        if (data.result.screen_name || data.result.legacy?.screen_name || data.result.core?.screen_name) {
+            addUser(data.result);
+        }
+        // Check if result has users array
+        if (Array.isArray(data.result.users)) {
+            for (const user of data.result.users) {
+                addUser(user);
+            }
+        }
+        // Check if result has user_results
+        if (data.result.user_results?.result) {
+            addUser(data.result.user_results.result);
         }
     }
     
@@ -1825,10 +1848,28 @@ async function getTweetInteractions(type) {
         
         // Handle retweets and likes - these endpoints return users, not tweets
         if (type === 'likes' || type === 'retweets') {
+            // Log full response structure for debugging
+            console.log(`📊 ${type} response keys:`, Object.keys(data || {}));
+            console.log(`📊 ${type} response structure (first 2000 chars):`, JSON.stringify(data, null, 2).substring(0, 2000));
+            
             const users = extractUsersFromResponse(data);
             console.log(`✅ Extracted ${users.length} users for ${type}`);
+            
             if (users.length === 0) {
-                showWarning(container, `No ${type} found for this tweet.`);
+                // For likes, check if the endpoint is deprecated or unavailable
+                if (type === 'likes') {
+                    // Check if response indicates no data or deprecated endpoint
+                    const hasInstructions = !!(data.result?.timeline?.instructions || data.timeline?.instructions || []);
+                    const hasData = !!(data.data || data.result || data.timeline);
+                    
+                    if (!hasInstructions && !hasData) {
+                        showWarning(container, 'The likes endpoint may be deprecated or unavailable. User likes are not publicly available through this API.');
+                    } else {
+                        showWarning(container, 'No likes found for this tweet.');
+                    }
+                } else {
+                    showWarning(container, `No ${type} found for this tweet.`);
+                }
                 return;
             }
             displayUsers(users, container, type.charAt(0).toUpperCase() + type.slice(1));
@@ -4039,51 +4080,72 @@ function displayUsers(users, container, title) {
         // Try multiple paths for legacy object
         const legacy = user.legacy || user.user?.legacy || user.result?.legacy || user;
         
-        // Try multiple paths for user data
+        // Try multiple paths for user data - check core.screen_name first (new API structure)
         const screenName = 
-            legacy.screen_name || 
+            user.core?.screen_name ||
+            legacy?.screen_name || 
             user.screen_name ||
+            dget(user, 'core.screen_name') ||
             dget(user, 'user.legacy.screen_name') ||
             dget(user, 'result.legacy.screen_name') ||
+            dget(user, 'legacy.screen_name') ||
             'unknown';
         
+        // Try multiple paths for name - check core.name first (new API structure)
         const name = 
-            legacy.name || 
+            user.core?.name ||
+            legacy?.name || 
             user.name ||
+            dget(user, 'core.name') ||
             dget(user, 'user.legacy.name') ||
             dget(user, 'result.legacy.name') ||
+            dget(user, 'legacy.name') ||
             '';
         
+        // Try multiple paths for description
         const description = 
-            legacy.description || 
+            legacy?.description || 
             user.description ||
             dget(user, 'user.legacy.description') ||
             dget(user, 'result.legacy.description') ||
+            dget(user, 'legacy.description') ||
             '';
         
+        // Try multiple paths for followers count
         const followersCount = 
-            legacy.followers_count || 
-            legacy.normal_followers_count ||
+            legacy?.followers_count || 
+            legacy?.normal_followers_count ||
             user.followers_count ||
             dget(user, 'user.legacy.followers_count') ||
             dget(user, 'user.legacy.normal_followers_count') ||
+            dget(user, 'legacy.followers_count') ||
+            dget(user, 'legacy.normal_followers_count') ||
             0;
         
+        // Try multiple paths for statuses count
         const statusesCount = 
-            legacy.statuses_count || 
+            legacy?.statuses_count || 
             user.statuses_count ||
             dget(user, 'user.legacy.statuses_count') ||
+            dget(user, 'legacy.statuses_count') ||
             0;
         
+        // Try multiple paths for verified status
         const verified = 
-            legacy.verified || 
+            legacy?.verified || 
             user.verified ||
-            dget(user, 'user.legacy.verified') ||
             user.is_blue_verified ||
+            dget(user, 'user.legacy.verified') ||
+            dget(user, 'legacy.verified') ||
             false;
         
-        if (idx === 0 && !screenName) {
-            console.warn('⚠️ First user has no screen_name. User structure:', Object.keys(user || {}), 'Legacy keys:', Object.keys(legacy || {}));
+        // Debug first user if screen_name is still unknown
+        if (idx === 0 && (!screenName || screenName === 'unknown')) {
+            console.warn('⚠️ First user has no screen_name. User keys:', Object.keys(user || {}));
+            console.warn('  User.core:', user.core);
+            console.warn('  User.legacy:', user.legacy);
+            console.warn('  Legacy keys:', Object.keys(legacy || {}));
+            console.warn('  Full user (first 1000 chars):', JSON.stringify(user, null, 2).substring(0, 1000));
         }
         
         return `<div class="user-card">
