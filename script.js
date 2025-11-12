@@ -1704,8 +1704,8 @@ document.getElementById('get-community-details-btn').addEventListener('click', a
           </div>
         ` : ''}
         <details style="margin-top:16px;">
-          <summary style="cursor: pointer; color: #1da1f2;">📋 View Raw JSON</summary>
-          <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto;">${esc(JSON.stringify(details, null, 2))}</pre>
+          <summary style="cursor: pointer; color: #1da1f2; user-select: none;">📋 View Raw JSON</summary>
+          <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; background: #f7f9fa; padding: 12px; border-radius: 4px; font-size: 12px;">${esc(JSON.stringify(details, null, 2))}</pre>
         </details>
       </div>
     `;
@@ -1930,7 +1930,79 @@ document.getElementById('get-community-about-btn').addEventListener('click', asy
         }
         const data = await fetchFromAPI('/community-about', { communityId });
         console.log('📊 Community about response:', Object.keys(data || {}));
-        displayGenericResults(data, container, 'About Community');
+        
+        // Try to format the about data similar to details
+        // The structure might be similar to community-details
+        const about = dget(data, 'result.result') || dget(data, 'result') || dget(data, 'data') || data;
+        
+        // Check if it's a structured response similar to details
+        if (about && typeof about === 'object' && (about.name || about.description || about.community)) {
+            const community = about.community || about;
+            const name = community.name || about.name || 'Community';
+            const desc = community.description || about.description || '';
+            const members = community.member_count || about.member_count || 0;
+            const isMember = community.is_member || about.is_member || false;
+            const role = community.role || about.role || 'NonMember';
+            const joinPolicy = community.join_policy || about.join_policy || 'Unknown';
+            const createdAt = community.created_at || about.created_at;
+            const isNSFW = community.is_nsfw || about.is_nsfw || false;
+            const primaryTopic = dget(community, 'primary_community_topic.topic_name') || dget(about, 'primary_community_topic.topic_name') || '';
+            const creator = dget(community, 'creator_results.result.legacy.screen_name') || dget(about, 'creator_results.result.legacy.screen_name') || '';
+            const rules = community.rules || about.rules || [];
+            const customBanner = dget(community, 'custom_banner_media.media_info.original_img_url') || dget(about, 'custom_banner_media.media_info.original_img_url') || '';
+            const defaultBanner = dget(community, 'default_banner_media.media_info.original_img_url') || dget(about, 'default_banner_media.media_info.original_img_url') || '';
+            const bannerUrl = customBanner || defaultBanner;
+            
+            // Format created date
+            let createdDateStr = '';
+            if (createdAt) {
+                try {
+                    const date = new Date(Number(createdAt));
+                    createdDateStr = date.toLocaleDateString('en-US', { 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                    });
+                } catch (e) {
+                    createdDateStr = '';
+                }
+            }
+            
+            container.innerHTML = `
+                <div class="community-card" style="padding: 16px;">
+                    ${bannerUrl ? `<img src="${esc(bannerUrl)}" alt="Community banner" style="width: 100%; max-height: 200px; object-fit: cover; border-radius: 8px; margin-bottom: 16px;">` : ''}
+                    <h3 style="margin: 0 0 8px 0;">${esc(name)} <small style="opacity:.7; font-weight: normal;">(${esc(communityId)})</small></h3>
+                    ${desc ? `<p style="color: #65676b; margin: 8px 0;">${esc(desc)}</p>` : ''}
+                    <div class="tweet-footer" style="margin: 12px 0;">
+                        <span>👥 ${formatNumber(members)} members</span>
+                        ${primaryTopic ? `<span>🏷️ ${esc(primaryTopic)}</span>` : ''}
+                        ${isNSFW ? '<span style="color: #e0245e;">🔞 NSFW</span>' : ''}
+                        ${isMember ? `<span style="color: #1da1f2;">✓ Member</span>` : `<span style="color: #657786;">Not a member</span>`}
+                    </div>
+                    <div style="margin: 12px 0; padding: 12px; background: #f7f9fa; border-radius: 8px;">
+                        <div style="margin-bottom: 8px;"><strong>Join Policy:</strong> ${esc(joinPolicy)}</div>
+                        ${creator ? `<div style="margin-bottom: 8px;"><strong>Creator:</strong> @${esc(creator)}</div>` : ''}
+                        ${createdDateStr ? `<div style="margin-bottom: 8px;"><strong>Created:</strong> ${esc(createdDateStr)}</div>` : ''}
+                        ${role ? `<div><strong>Your Role:</strong> ${esc(role)}</div>` : ''}
+                    </div>
+                    ${rules.length > 0 ? `
+                        <div style="margin: 12px 0;">
+                            <strong style="display: block; margin-bottom: 8px;">Community Rules (${rules.length}):</strong>
+                            <ul style="margin: 0; padding-left: 20px; color: #65676b;">
+                                ${rules.map(rule => `<li>${esc(rule.name || 'Unnamed rule')}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    <details style="margin-top:16px;">
+                        <summary style="cursor: pointer; color: #1da1f2; user-select: none;">📋 View Raw JSON</summary>
+                        <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; background: #f7f9fa; padding: 12px; border-radius: 4px; font-size: 12px;">${esc(JSON.stringify(data, null, 2))}</pre>
+                    </details>
+                </div>
+            `;
+        } else {
+            // Fallback to generic display if structure is different
+            displayGenericResults(data, container, 'About Community');
+        }
     } catch (err) {
         console.error('Community about error:', err);
         const errorMsg = err.message || 'Could not load community about.';
@@ -2576,10 +2648,11 @@ function displayGenericResults(data, container, title) {
         container.innerHTML = `<h3>${title}</h3><p>No data available.</p>`;
         return;
     }
-    container.innerHTML = `<h3>${title}</h3><div class="list-card">
-        <details style="margin-top: 8px;">
-            <summary style="cursor: pointer; color: #1da1f2;">📋 View Raw JSON</summary>
-            <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">${esc(JSON.stringify(data, null, 2))}</pre>
+    container.innerHTML = `<h3>${title}</h3><div class="list-card" style="padding: 16px;">
+        <p style="color: #65676b; margin-bottom: 12px;">Raw API response data:</p>
+        <details>
+            <summary style="cursor: pointer; color: #1da1f2; user-select: none;">📋 View Raw JSON</summary>
+            <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; background: #f7f9fa; padding: 12px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">${esc(JSON.stringify(data, null, 2))}</pre>
         </details>
     </div>`;
 }
