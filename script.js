@@ -1647,16 +1647,67 @@ document.getElementById('get-community-details-btn').addEventListener('click', a
         }
         const details = await fetchFromAPI('/community-details', { communityId });
         // The response structure is: result.result.name, result.result.member_count, etc.
-        const name = dget(details, 'result.result.name') || dget(details, 'result.name') || dget(details, 'result.community.name') || 'Community';
-        const desc = dget(details, 'result.result.description') || dget(details, 'result.description') || dget(details, 'result.community.description') || '';
-        const members = dget(details, 'result.result.member_count') || dget(details, 'result.member_count') || dget(details, 'result.stats.member_count') || 0;
+        const community = dget(details, 'result.result') || dget(details, 'result') || {};
+        const name = community.name || 'Community';
+        const desc = community.description || '';
+        const members = community.member_count || 0;
+        const isMember = community.is_member || false;
+        const role = community.role || 'NonMember';
+        const joinPolicy = community.join_policy || 'Unknown';
+        const createdAt = community.created_at;
+        const isNSFW = community.is_nsfw || false;
+        const primaryTopic = dget(community, 'primary_community_topic.topic_name') || '';
+        const creator = dget(community, 'creator_results.result.legacy.screen_name') || '';
+        const rules = community.rules || [];
+        const customBanner = dget(community, 'custom_banner_media.media_info.original_img_url') || '';
+        const defaultBanner = dget(community, 'default_banner_media.media_info.original_img_url') || '';
+        const bannerUrl = customBanner || defaultBanner;
+        
+        // Format created date
+        let createdDateStr = '';
+        if (createdAt) {
+            try {
+                const date = new Date(Number(createdAt));
+                createdDateStr = date.toLocaleDateString('en-US', { 
+                    year: 'numeric', 
+                    month: 'long', 
+                    day: 'numeric' 
+                });
+            } catch (e) {
+                createdDateStr = '';
+            }
+        }
+        
         container.innerHTML = `
-      <h3>${esc(name)} <small style="opacity:.7">(${esc(communityId)})</small></h3>
-      ${desc ? `<p>${esc(desc)}</p>` : ''}
-      <div class="tweet-footer"><span>👥 ${esc(members)} members</span></div>
-      <details style="margin-top:8px"><summary>Raw</summary>
-        <pre class="json-dump">${esc(JSON.stringify(details, null, 2))}</pre>
-      </details>
+      <div class="community-card" style="padding: 16px;">
+        ${bannerUrl ? `<img src="${esc(bannerUrl)}" alt="Community banner" style="width: 100%; max-height: 200px; object-fit: cover; border-radius: 8px; margin-bottom: 16px;">` : ''}
+        <h3 style="margin: 0 0 8px 0;">${esc(name)} <small style="opacity:.7; font-weight: normal;">(${esc(communityId)})</small></h3>
+        ${desc ? `<p style="color: #65676b; margin: 8px 0;">${esc(desc)}</p>` : ''}
+        <div class="tweet-footer" style="margin: 12px 0;">
+          <span>👥 ${formatNumber(members)} members</span>
+          ${primaryTopic ? `<span>🏷️ ${esc(primaryTopic)}</span>` : ''}
+          ${isNSFW ? '<span style="color: #e0245e;">🔞 NSFW</span>' : ''}
+          ${isMember ? `<span style="color: #1da1f2;">✓ Member</span>` : `<span style="color: #657786;">Not a member</span>`}
+        </div>
+        <div style="margin: 12px 0; padding: 12px; background: #f7f9fa; border-radius: 8px;">
+          <div style="margin-bottom: 8px;"><strong>Join Policy:</strong> ${esc(joinPolicy)}</div>
+          ${creator ? `<div style="margin-bottom: 8px;"><strong>Creator:</strong> @${esc(creator)}</div>` : ''}
+          ${createdDateStr ? `<div style="margin-bottom: 8px;"><strong>Created:</strong> ${esc(createdDateStr)}</div>` : ''}
+          ${role ? `<div><strong>Your Role:</strong> ${esc(role)}</div>` : ''}
+        </div>
+        ${rules.length > 0 ? `
+          <div style="margin: 12px 0;">
+            <strong style="display: block; margin-bottom: 8px;">Community Rules (${rules.length}):</strong>
+            <ul style="margin: 0; padding-left: 20px; color: #65676b;">
+              ${rules.map(rule => `<li>${esc(rule.name || 'Unnamed rule')}</li>`).join('')}
+            </ul>
+          </div>
+        ` : ''}
+        <details style="margin-top:16px;">
+          <summary style="cursor: pointer; color: #1da1f2;">📋 View Raw JSON</summary>
+          <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto;">${esc(JSON.stringify(details, null, 2))}</pre>
+        </details>
+      </div>
     `;
     } catch (err) {
         console.error('Community details error:', err);
