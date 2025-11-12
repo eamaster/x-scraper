@@ -81,9 +81,27 @@
         <!-- Tweet Tab -->
         <div class="tab-content" id="tweet-tab">
             <h2>Tweet Details</h2>
+            
+            <h3>Search for Tweets</h3>
+            <p style="color: #657786; margin-bottom: 10px;">Search for tweets by keyword, hashtag, or paste a tweet URL</p>
             <div class="search-container">
-                <input type="text" id="tweet-id-input" placeholder="Tweet ID (e.g., 1631781099415257088)">
-                <button id="get-tweet-btn" class="btn-primary">Get Tweet</button>
+                <input type="text" id="tweet-search-input" placeholder="Search tweets (e.g., Elon Musk, #bitcoin) or paste tweet URL">
+                <select id="tweet-search-type">
+                    <option value="Top">Top</option>
+                    <option value="Latest">Latest</option>
+                </select>
+                <input type="number" id="tweet-search-count" placeholder="Count" value="20" min="1" max="100">
+                <button id="search-tweets-btn" class="btn-primary">Search Tweets</button>
+            </div>
+            <div id="tweet-search-results" class="results-container" style="margin-top: 10px;"></div>
+            
+            <h3>Or Enter Tweet ID/URL Directly</h3>
+            <div class="search-container">
+                <input type="text" id="tweet-id-input" placeholder="Tweet ID or URL (e.g., 1631781099415257088 or https://twitter.com/username/status/1631781099415257088)">
+                <button id="get-tweet-btn" class="btn-primary">Get Tweet Details</button>
+            </div>
+            <div style="margin: 6px 0;">
+                <span id="selected-tweet-pill" style="display:none;padding:4px 8px;border-radius:999px;background:#eef;border:1px solid #ccd;"></span>
             </div>
             <div id="tweet-details" class="results-container"></div>
 

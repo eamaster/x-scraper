@@ -1167,38 +1167,417 @@ document.getElementById('get-verified-followers-btn').addEventListener('click', 
 // ====================
 
 let currentTweetId = '';
+let selectedTweet = null;
+let tweetDataCache = {}; // Cache tweet data by ID
 
-document.getElementById('get-tweet-btn').addEventListener('click', async () => {
-    const tweetId = document.getElementById('tweet-id-input').value.trim();
-    const container = document.getElementById('tweet-details');
-    if (!tweetId) { showError(container, 'Please enter a tweet ID'); return; }
+// Extract tweet ID from URL or return as-is if it's already an ID
+function extractTweetId(input) {
+    if (!input) return null;
+    input = input.trim();
+    
+    // If it's already a numeric ID, return it
+    if (/^\d+$/.test(input)) {
+        return input;
+    }
+    
+    // Try to extract from Twitter/X URL
+    // Patterns: 
+    // - https://twitter.com/username/status/1234567890
+    // - https://x.com/username/status/1234567890
+    // - twitter.com/username/status/1234567890
+    // - x.com/username/status/1234567890
+    const urlPatterns = [
+        /(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/i,
+        /\/status\/(\d+)/i,
+        /status\/(\d+)/i
+    ];
+    
+    for (const pattern of urlPatterns) {
+        const match = input.match(pattern);
+        if (match && match[1]) {
+            return match[1];
+        }
+    }
+    
+    // If no pattern matches, try to extract any long numeric string
+    const numericMatch = input.match(/\d{15,}/);
+    if (numericMatch) {
+        return numericMatch[0];
+    }
+    
+    return null;
+}
+
+// Set selected tweet and update UI
+function setSelectedTweet(tweet, tweetId) {
+    selectedTweet = tweet;
     currentTweetId = tweetId;
+    document.getElementById('tweet-id-input').value = tweetId;
+    
+    // Store tweet in cache
+    if (tweet) {
+        tweetDataCache[tweetId] = tweet;
+    }
+    
+    // Update selected tweet pill
+    const pill = document.getElementById('selected-tweet-pill');
+    if (pill && tweet) {
+        try {
+            const author = resolveAuthorFromTweet(tweet, {});
+            pill.textContent = `Selected: @${author.username} - Tweet ID: ${tweetId}`;
+            pill.style.display = 'inline-block';
+        } catch (e) {
+            pill.textContent = `Selected Tweet ID: ${tweetId}`;
+            pill.style.display = 'inline-block';
+        }
+    }
+    
+    console.log(`✅ Selected tweet ID: ${tweetId}`);
+}
+
+// Get tweet ID from input or selected tweet
+function getTweetIdOrResolve() {
+    const input = document.getElementById('tweet-id-input').value.trim();
+    
+    // If input exists, extract ID from it
+    if (input) {
+        const extractedId = extractTweetId(input);
+        if (extractedId) {
+            currentTweetId = extractedId;
+            return extractedId;
+        }
+        // If extraction failed but input looks like an ID, use it
+        if (/^\d+$/.test(input)) {
+            currentTweetId = input;
+            return input;
+        }
+        throw new Error('Invalid tweet ID or URL. Please enter a valid tweet ID or URL.');
+    }
+    
+    // If no input but we have a selected tweet, use it
+    if (currentTweetId) {
+        return currentTweetId;
+    }
+    
+    throw new Error('No tweet selected. Please search for a tweet and click on it, or enter a tweet ID/URL.');
+}
+
+// Search for tweets and display clickable results
+document.getElementById('search-tweets-btn').addEventListener('click', async () => {
+    const query = document.getElementById('tweet-search-input').value.trim();
+    const type = document.getElementById('tweet-search-type').value;
+    const count = document.getElementById('tweet-search-count').value || 20;
+    const container = document.getElementById('tweet-search-results');
+    
+    if (!query) {
+        showError(container, 'Please enter a search query');
+        return;
+    }
+    
+    // Check if the input is a URL - if so, extract ID and load tweet directly
+    const tweetId = extractTweetId(query);
+    if (tweetId && (query.includes('twitter.com') || query.includes('x.com') || query.includes('/status/'))) {
+        console.log(`🔍 Detected tweet URL, extracting ID: ${tweetId}`);
+        // Set the tweet ID and load it
+        document.getElementById('tweet-id-input').value = tweetId;
+        currentTweetId = tweetId;
+        handleTweetSelect(tweetId);
+        return;
+    }
+    
     showLoading(container);
     try {
+        console.log(`🔍 Searching tweets for: ${query}`);
+        const data = await fetchFromAPI('/search-v2', { query, type, count });
+        
+        // Extract tweets
+        const tweets = extractTweetsFromResponse(data);
+        console.log(`✅ Found ${tweets.length} tweets`);
+        
+        if (tweets.length === 0) {
+            showWarning(container, 'No tweets found. Try a different search query.');
+            return;
+        }
+        
+        // Build users index
+        const usersIdx = buildUsersIndexDeep(data);
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+        
+        // Extract users from tweets
+        for (const tweet of tweets) {
+            const t = tweet?.result || tweet;
+            const userPaths = [
+                dget(t, 'core.user_results.result'),
+                dget(t, 'user_results.result'),
+                dget(t, 'user'),
+                t.core?.user_results?.result,
+                t.user_results?.result,
+                t.user,
+            ];
+            for (const user of userPaths) {
+                if (!user) continue;
+                const legacy = user.legacy || user;
+                const uid = user.rest_id || legacy.id_str || user.id_str || user.id;
+                const uidStr = uid ? String(uid) : null;
+                if (uidStr && (legacy.screen_name || user.screen_name || user.core?.screen_name)) {
+                    if (!usersIdx[uidStr]) {
+                        usersIdx[uidStr] = legacy;
+                    }
+                }
+            }
+        }
+        
+        // Display tweets with click handlers
+        displayTweetsWithSelection(tweets, container, `Search Results for "${query}"`, usersIdx);
+        
+    } catch (error) {
+        console.error('❌ Error searching tweets:', error);
+        showError(container, error.message);
+    }
+});
+
+// Display tweets with click-to-select functionality
+function displayTweetsWithSelection(tweets, container, title, usersIndex = {}) {
+    if (!Array.isArray(tweets) || tweets.length === 0) {
+        container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
+        return;
+    }
+    
+    console.log(`🎨 Displaying ${tweets.length} tweets with selection`);
+    
+    // Store tweets in cache for later retrieval
+    tweets.forEach((t, idx) => {
+        let node = unwrapTweet(t);
+        if (!node) return;
+        
+        const tweetId = node.rest_id || 
+                       node.legacy?.id_str || 
+                       node.id_str || 
+                       node.id ||
+                       dget(node, 'result.rest_id') ||
+                       dget(node, 'result.legacy.id_str') ||
+                       '';
+        
+        if (tweetId) {
+            tweetDataCache[tweetId] = t;
+        }
+    });
+    
+    container.innerHTML = `<h3>${title} - Click on a tweet to view details</h3>${
+        tweets.map((t, idx) => {
+            // Unwrap tweet node
+            let node = unwrapTweet(t);
+            if (!node) return '';
+            
+            // Get tweet ID
+            const tweetId = node.rest_id || 
+                           node.legacy?.id_str || 
+                           node.id_str || 
+                           node.id ||
+                           dget(node, 'result.rest_id') ||
+                           dget(node, 'result.legacy.id_str') ||
+                           '';
+            
+            if (!tweetId) {
+                console.warn(`⚠️ Tweet ${idx} has no ID`);
+                return '';
+            }
+            
+            // Extract tweet data
+            let legacy = node.legacy;
+            if (!legacy) {
+                if (node.full_text || node.created_at || node.text) {
+                    legacy = node;
+                } else {
+                    legacy = node.tweet?.legacy || node.result?.legacy || node;
+                }
+            }
+            
+            const text = 
+                legacy?.full_text || 
+                legacy?.text || 
+                node?.full_text || 
+                node?.text || 
+                '';
+            
+            const author = resolveAuthorFromTweet(t, usersIndex);
+            
+            const favoriteCount = legacy?.favorite_count || legacy?.favourites_count || 0;
+            const retweetCount = legacy?.retweet_count || 0;
+            const replyCount = legacy?.reply_count || 0;
+            
+            // Format date
+            const dateRaw = legacy?.created_at || node?.created_at || '';
+            let dateStr = 'Unknown';
+            if (dateRaw) {
+                try {
+                    const parsed = new Date(dateRaw);
+                    dateStr = isNaN(parsed.getTime()) ? dateRaw : parsed.toLocaleString();
+                } catch (e) {
+                    dateStr = String(dateRaw);
+                }
+            }
+            
+            return `<div class="tweet-card selectable-tweet" data-tweet-id="${esc(tweetId)}" style="cursor: pointer; border: 2px solid #e1e8ed; border-radius: 8px; padding: 12px; margin: 8px 0; transition: all 0.2s; background: #fff;" 
+                     onmouseover="this.style.borderColor='#1da1f2'; this.style.boxShadow='0 2px 8px rgba(29,161,242,0.2)';" 
+                     onmouseout="this.style.borderColor='#e1e8ed'; this.style.boxShadow='none';">
+                <p><strong>@${esc(author.username)}:</strong> ${text ? esc(text.substring(0, 200)) + (text.length > 200 ? '...' : '') : '<em style="color: #657786;">No content</em>'}</p>
+                <div class="tweet-footer">
+                  <span>❤️ ${formatNumber(favoriteCount)}</span>
+                  <span>🔁 ${formatNumber(retweetCount)}</span>
+                  <span>💬 ${formatNumber(replyCount)}</span>
+                  <span>📅 ${esc(dateStr)}</span>
+                  <span style="margin-left: 10px; color: #1da1f2; font-weight: bold;">📌 Click to select</span>
+                </div>
+                <div style="margin-top: 5px; font-size: 12px; color: #657786;">Tweet ID: ${esc(tweetId)}</div>
+            </div>`;
+        }).filter(Boolean).join('')
+    }`;
+    
+    // Add click event listeners to tweet cards
+    container.querySelectorAll('.selectable-tweet').forEach(card => {
+        card.addEventListener('click', function() {
+            const tweetId = this.getAttribute('data-tweet-id');
+            if (tweetId) {
+                handleTweetSelect(tweetId);
+            }
+        });
+    });
+}
+
+// Handle tweet selection - simplified version
+function handleTweetSelect(tweetId) {
+    if (!tweetId) return;
+    
+    console.log(`✅ Tweet selected: ${tweetId}`);
+    
+    // Set the tweet ID in the input field
+    document.getElementById('tweet-id-input').value = tweetId;
+    currentTweetId = tweetId;
+    
+    // Update selected tweet pill
+    const pill = document.getElementById('selected-tweet-pill');
+    if (pill) {
+        pill.textContent = `Selected Tweet ID: ${tweetId}`;
+        pill.style.display = 'inline-block';
+    }
+    
+    // Automatically load tweet details
+    document.getElementById('get-tweet-btn').click();
+}
+
+document.getElementById('get-tweet-btn').addEventListener('click', async () => {
+    const input = document.getElementById('tweet-id-input').value.trim();
+    const container = document.getElementById('tweet-details');
+    
+    if (!input) {
+        showError(container, 'Please enter a tweet ID or URL, or search for a tweet and click on it');
+        return;
+    }
+    
+    // Extract tweet ID from input (handles URLs)
+    const tweetId = extractTweetId(input);
+    if (!tweetId) {
+        showError(container, 'Invalid tweet ID or URL. Please enter a valid tweet ID or URL (e.g., https://twitter.com/username/status/1234567890)');
+        return;
+    }
+    
+    currentTweetId = tweetId;
+    showLoading(container);
+    
+    try {
+        console.log(`🔍 Fetching tweet details for ID: ${tweetId}`);
         const data = await fetchFromAPI('/tweet-v2', { pid: tweetId });
-        displayTweets([data.result || data], container, 'Tweet Details');
-    } catch (error) { showError(container, error.message); }
+        console.log('📊 Tweet details response:', data);
+        
+        // Extract tweet from response
+        const tweet = data.result || data;
+        if (!tweet) {
+            throw new Error('No tweet data found in response');
+        }
+        
+        // Build users index for author resolution
+        const usersIdx = buildUsersIndexDeep(data);
+        
+        // Update selected tweet
+        setSelectedTweet(tweet, tweetId);
+        
+        // Display tweet details
+        displayTweets([tweet], container, 'Tweet Details', { usersIndex: usersIdx });
+        
+    } catch (error) {
+        console.error('❌ Error fetching tweet:', error);
+        showError(container, error.message);
+    }
 });
 
 async function getTweetInteractions(type) {
-    const tweetId = document.getElementById('tweet-id-input').value.trim() || currentTweetId;
     const count = document.getElementById('tweet-count').value || 40;
     const container = document.getElementById('tweet-interactions');
-    if (!tweetId) { showError(container, 'Please enter a tweet ID first'); return; }
+    
+    // Get tweet ID (from input or selected)
+    let tweetId;
+    try {
+        tweetId = getTweetIdOrResolve();
+    } catch (error) {
+        showError(container, error.message);
+        return;
+    }
+    
+    if (!tweetId) {
+        showError(container, 'Please enter a tweet ID first, or search for a tweet and click on it');
+        return;
+    }
+    
     showLoading(container);
     const endpoints = { comments: '/comments-v2', retweets: '/retweets', quotes: '/quotes', likes: '/likes' };
     try {
         const params = { pid: tweetId, count };
         if (type === 'comments') params.rankingMode = 'Relevance';
+        
+        console.log(`🔍 Fetching ${type} for tweet ID: ${tweetId}`);
         const data = await fetchFromAPI(endpoints[type], params);
+        console.log(`📊 ${type} response:`, data);
+        
         if (type === 'likes') {
             const users = extractUsersFromResponse(data);
+            console.log(`✅ Extracted ${users.length} users for ${type}`);
             displayUsers(users, container, type.charAt(0).toUpperCase() + type.slice(1));
         } else {
+            // Build users index for author resolution
+            const usersIdx = buildUsersIndexDeep(data);
+            console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+            
+            // Extract users from tweets
             const tweets = extractTweetsFromResponse(data);
-            displayTweets(tweets, container, type.charAt(0).toUpperCase() + type.slice(1));
+            for (const tweet of tweets) {
+                const t = tweet?.result || tweet;
+                const userPaths = [
+                    dget(t, 'core.user_results.result'),
+                    dget(t, 'user_results.result'),
+                    t.core?.user_results?.result,
+                    t.user_results?.result,
+                ];
+                for (const user of userPaths) {
+                    if (!user) continue;
+                    const legacy = user.legacy || user;
+                    const uid = user.rest_id || legacy.id_str || user.id_str || user.id;
+                    const uidStr = uid ? String(uid) : null;
+                    if (uidStr && (legacy.screen_name || user.screen_name || user.core?.screen_name)) {
+                        if (!usersIdx[uidStr]) {
+                            usersIdx[uidStr] = legacy;
+                        }
+                    }
+                }
+            }
+            
+            console.log(`✅ Extracted ${tweets.length} tweets for ${type}`);
+            displayTweets(tweets, container, type.charAt(0).toUpperCase() + type.slice(1), { usersIndex: usersIdx });
         }
-    } catch (error) { showError(container, error.message); }
+    } catch (error) {
+        console.error(`❌ Error fetching ${type}:`, error);
+        showError(container, error.message);
+    }
 }
 
 document.getElementById('get-comments-btn').addEventListener('click', () => getTweetInteractions('comments'));
