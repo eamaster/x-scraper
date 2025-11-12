@@ -1721,10 +1721,16 @@ document.getElementById('get-community-tweets-btn').addEventListener('click', as
     showLoading(container);
     try {
         const communityId = await getCommunityIdOrResolve();
-        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
+        if (!communityId) {
+            showWarning(container, 'No community ID found. Please search for a community and select one, or enter a numeric community ID.');
+            return;
+        }
         const data = await fetchFromAPI('/community-tweets', { communityId, searchType: 'Default', rankingMode: 'Relevance', count: 20 });
+        console.log('📊 Community tweets response:', Object.keys(data || {}));
         const usersIdx = buildUsersIndexDeep(data);
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
         const tweets = extractTweetsFromResponse(data);
+        console.log(`📝 Extracted ${tweets.length} tweets`);
         // Also extract users from tweets themselves
         for (const tweet of tweets) {
             const t = tweet?.result || tweet;
@@ -1733,6 +1739,10 @@ document.getElementById('get-community-tweets-btn').addEventListener('click', as
                 dget(t, 'user_results.result'),
                 dget(t, 'user'),
                 dget(t, 'legacy.user'),
+                t.core?.user_results?.result,
+                t.user_results?.result,
+                t.user,
+                t.legacy?.user,
             ];
             for (const user of userPaths) {
                 if (!user) continue;
@@ -1750,10 +1760,12 @@ document.getElementById('get-community-tweets-btn').addEventListener('click', as
                 }
             }
         }
+        console.log(`👥 Final users index: ${Object.keys(usersIdx).length} users`);
         displayTweets(tweets, container, 'Community Tweets', { usersIndex: usersIdx });
     } catch (err) {
         console.error('Community tweets error:', err);
-        showError(container, 'Could not load community tweets.');
+        const errorMsg = err.message || 'Could not load community tweets.';
+        showError(container, errorMsg);
     }
 });
 
@@ -1762,32 +1774,73 @@ document.getElementById('get-community-members-btn').addEventListener('click', a
     showLoading(container);
     try {
         const communityId = await getCommunityIdOrResolve();
-        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
+        if (!communityId) {
+            showWarning(container, 'No community ID found. Please search for a community and select one, or enter a numeric community ID.');
+            return;
+        }
         const data = await fetchFromAPI('/community-members', { communityId });
-        // Extract users from response
+        console.log('📊 Community members response:', Object.keys(data || {}));
+        
+        // Extract users using buildUsersIndexDeep
         const usersIdx = buildUsersIndexDeep(data);
-        const users = Object.values(usersIdx).map(u => {
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+        
+        // Convert index to users array
+        let users = Object.values(usersIdx).map(u => {
             const legacy = u.legacy || u;
             return {
                 rest_id: u.rest_id || legacy.id_str || u.id_str || u.id,
                 legacy: legacy
             };
-        });
-        // Also try to extract from timeline instructions
-        if (users.length === 0) {
-            const instructions = dget(data, 'result.timeline.instructions') || [];
-            for (const ins of instructions) {
-                const entries = ins.entries || ins.addEntries || [];
-                for (const e of entries) {
-                    const ur = dget(e, 'content.itemContent.user_results.result');
-                    if (ur) users.push(ur);
+        }).filter(u => u.legacy && u.legacy.screen_name); // Only keep users with screen_name
+        
+        // Also extract from timeline instructions (combine both approaches)
+        const instructions = dget(data, 'result.timeline.instructions') || [];
+        console.log(`📋 Found ${instructions.length} timeline instructions`);
+        const seenUserIds = new Set(users.map(u => u.rest_id).filter(Boolean));
+        
+        for (const ins of instructions) {
+            // Check all possible entry paths
+            const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
+            for (const e of entries) {
+                if (!e || typeof e !== 'object') continue;
+                // Try multiple paths for user results
+                const userPaths = [
+                    dget(e, 'content.itemContent.user_results.result'),
+                    dget(e, 'content.user_results.result'),
+                    dget(e, 'itemContent.user_results.result'),
+                    dget(e, 'user_results.result'),
+                    e.content?.itemContent?.user_results?.result,
+                    e.content?.user_results?.result,
+                    e.itemContent?.user_results?.result,
+                    e.user_results?.result,
+                ];
+                for (const ur of userPaths) {
+                    if (!ur || typeof ur !== 'object') continue;
+                    const uid = ur.rest_id || ur.id_str || ur.id || ur.legacy?.id_str || ur.legacy?.id;
+                    if (!uid || seenUserIds.has(String(uid))) continue;
+                    const legacy = ur.legacy || ur;
+                    if (legacy.screen_name) {
+                        seenUserIds.add(String(uid));
+                        users.push({
+                            rest_id: String(uid),
+                            legacy: legacy
+                        });
+                    }
                 }
             }
         }
-        displayUsers(users, container, 'Community Members');
+        
+        console.log(`✅ Extracted ${users.length} members`);
+        if (users.length === 0) {
+            showWarning(container, 'No members found. The community might be private or have no members.');
+            return;
+        }
+        displayUsers(users, container, `Community Members (${users.length})`);
     } catch (err) {
         console.error('Community members error:', err);
-        showError(container, 'Could not load community members.');
+        const errorMsg = err.message || 'Could not load community members.';
+        showError(container, errorMsg);
     }
 });
 
@@ -1796,32 +1849,73 @@ document.getElementById('get-community-moderators-btn').addEventListener('click'
     showLoading(container);
     try {
         const communityId = await getCommunityIdOrResolve();
-        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
+        if (!communityId) {
+            showWarning(container, 'No community ID found. Please search for a community and select one, or enter a numeric community ID.');
+            return;
+        }
         const data = await fetchFromAPI('/community-moderators', { communityId });
-        // Extract users from response
+        console.log('📊 Community moderators response:', Object.keys(data || {}));
+        
+        // Extract users using buildUsersIndexDeep
         const usersIdx = buildUsersIndexDeep(data);
-        const users = Object.values(usersIdx).map(u => {
+        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+        
+        // Convert index to users array
+        let users = Object.values(usersIdx).map(u => {
             const legacy = u.legacy || u;
             return {
                 rest_id: u.rest_id || legacy.id_str || u.id_str || u.id,
                 legacy: legacy
             };
-        });
-        // Also try to extract from timeline instructions
-        if (users.length === 0) {
-            const instructions = dget(data, 'result.timeline.instructions') || [];
-            for (const ins of instructions) {
-                const entries = ins.entries || ins.addEntries || [];
-                for (const e of entries) {
-                    const ur = dget(e, 'content.itemContent.user_results.result');
-                    if (ur) users.push(ur);
+        }).filter(u => u.legacy && u.legacy.screen_name); // Only keep users with screen_name
+        
+        // Also extract from timeline instructions (combine both approaches)
+        const instructions = dget(data, 'result.timeline.instructions') || [];
+        console.log(`📋 Found ${instructions.length} timeline instructions`);
+        const seenUserIds = new Set(users.map(u => u.rest_id).filter(Boolean));
+        
+        for (const ins of instructions) {
+            // Check all possible entry paths
+            const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
+            for (const e of entries) {
+                if (!e || typeof e !== 'object') continue;
+                // Try multiple paths for user results
+                const userPaths = [
+                    dget(e, 'content.itemContent.user_results.result'),
+                    dget(e, 'content.user_results.result'),
+                    dget(e, 'itemContent.user_results.result'),
+                    dget(e, 'user_results.result'),
+                    e.content?.itemContent?.user_results?.result,
+                    e.content?.user_results?.result,
+                    e.itemContent?.user_results?.result,
+                    e.user_results?.result,
+                ];
+                for (const ur of userPaths) {
+                    if (!ur || typeof ur !== 'object') continue;
+                    const uid = ur.rest_id || ur.id_str || ur.id || ur.legacy?.id_str || ur.legacy?.id;
+                    if (!uid || seenUserIds.has(String(uid))) continue;
+                    const legacy = ur.legacy || ur;
+                    if (legacy.screen_name) {
+                        seenUserIds.add(String(uid));
+                        users.push({
+                            rest_id: String(uid),
+                            legacy: legacy
+                        });
+                    }
                 }
             }
         }
-        displayUsers(users, container, 'Community Moderators');
+        
+        console.log(`✅ Extracted ${users.length} moderators`);
+        if (users.length === 0) {
+            showWarning(container, 'No moderators found. The community might not have moderators or the data is not available.');
+            return;
+        }
+        displayUsers(users, container, `Community Moderators (${users.length})`);
     } catch (err) {
         console.error('Community moderators error:', err);
-        showError(container, 'Could not load community moderators.');
+        const errorMsg = err.message || 'Could not load community moderators.';
+        showError(container, errorMsg);
     }
 });
 
@@ -1830,12 +1924,17 @@ document.getElementById('get-community-about-btn').addEventListener('click', asy
     showLoading(container);
     try {
         const communityId = await getCommunityIdOrResolve();
-        if (!communityId){ showWarning(container, 'No community matched your search.'); return; }
+        if (!communityId) {
+            showWarning(container, 'No community ID found. Please search for a community and select one, or enter a numeric community ID.');
+            return;
+        }
         const data = await fetchFromAPI('/community-about', { communityId });
+        console.log('📊 Community about response:', Object.keys(data || {}));
         displayGenericResults(data, container, 'About Community');
     } catch (err) {
         console.error('Community about error:', err);
-        showError(container, 'Could not load community about.');
+        const errorMsg = err.message || 'Could not load community about.';
+        showError(container, errorMsg);
     }
 });
 
@@ -2473,8 +2572,15 @@ function displayCommunities(communities, container, title) {
 }
 
 function displayGenericResults(data, container, title) {
+    if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+        container.innerHTML = `<h3>${title}</h3><p>No data available.</p>`;
+        return;
+    }
     container.innerHTML = `<h3>${title}</h3><div class="list-card">
-        <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">${JSON.stringify(data, null, 2)}</pre>
+        <details style="margin-top: 8px;">
+            <summary style="cursor: pointer; color: #1da1f2;">📋 View Raw JSON</summary>
+            <pre class="json-dump" style="margin-top: 8px; max-height: 400px; overflow: auto; white-space: pre-wrap; word-wrap: break-word; font-size: 13px;">${esc(JSON.stringify(data, null, 2))}</pre>
+        </details>
     </div>`;
 }
 
