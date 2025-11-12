@@ -1821,7 +1821,9 @@ document.getElementById('get-tweet-btn').addEventListener('click', async () => {
 });
 
 async function getTweetInteractions(type) {
-    const count = document.getElementById('tweet-count').value || 40;
+    const countInput = document.getElementById('tweet-count').value;
+    // Convert to number and ensure minimum of 1
+    const count = Math.max(1, parseInt(countInput, 10) || 40);
     const container = document.getElementById('tweet-interactions');
     
     // Get tweet ID (from input or selected)
@@ -1844,7 +1846,7 @@ async function getTweetInteractions(type) {
         const params = { pid: tweetId, count };
         if (type === 'comments') params.rankingMode = 'Relevance';
         
-        console.log(`🔍 Fetching ${type} for tweet ID: ${tweetId}`);
+        console.log(`🔍 Fetching ${type} for tweet ID: ${tweetId} with count: ${count}`);
         const data = await fetchFromAPI(endpoints[type], params);
         console.log(`📊 ${type} response:`, data);
         
@@ -1854,12 +1856,12 @@ async function getTweetInteractions(type) {
             console.log(`📊 ${type} response keys:`, Object.keys(data || {}));
             console.log(`📊 ${type} response structure (first 2000 chars):`, JSON.stringify(data, null, 2).substring(0, 2000));
             
-            const users = extractUsersFromResponse(data);
+            let users = extractUsersFromResponse(data);
             console.log(`✅ Extracted ${users.length} users for ${type}`);
             
             if (users.length === 0) {
                 // For likes, check if the endpoint is deprecated or unavailable
-                if (type === 'likes') {
+        if (type === 'likes') {
                     // Check if response indicates no data or deprecated endpoint
                     const hasInstructions = !!(data.result?.timeline?.instructions || data.timeline?.instructions || []);
                     const hasData = !!(data.data || data.result || data.timeline);
@@ -1874,6 +1876,13 @@ async function getTweetInteractions(type) {
                 }
                 return;
             }
+            
+            // Limit results to requested count
+            if (users.length > count) {
+                users = users.slice(0, count);
+                console.log(`📊 Limited ${type} results to ${count} users (API returned ${users.length} total)`);
+            }
+            
             displayUsers(users, container, type.charAt(0).toUpperCase() + type.slice(1));
         } else {
             // Comments and quotes return tweets, not users
@@ -1882,8 +1891,8 @@ async function getTweetInteractions(type) {
             console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
             
             // Extract tweets from response
-            const tweets = extractTweetsFromResponse(data);
-            console.log(`🔬 Extracting tweets from ${type} response`);
+            let tweets = extractTweetsFromResponse(data);
+            console.log(`🔬 Extracted ${tweets.length} tweets from ${type} response`);
             
             // Extract users from tweets and merge into usersIdx
             for (const tweet of tweets) {
@@ -1912,6 +1921,13 @@ async function getTweetInteractions(type) {
                 showWarning(container, `No ${type} found for this tweet.`);
                 return;
             }
+            
+            // Limit results to requested count
+            if (tweets.length > count) {
+                tweets = tweets.slice(0, count);
+                console.log(`📊 Limited ${type} results to ${count} tweets (API returned ${tweets.length} total)`);
+            }
+            
             displayTweets(tweets, container, type.charAt(0).toUpperCase() + type.slice(1), { usersIndex: usersIdx });
         }
     } catch (error) {
