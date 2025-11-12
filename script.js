@@ -175,63 +175,182 @@ function extractUsersFromSearch(json) {
 // Map any of the Twttr API user payload shapes to our UI fields.
 // Fixes "Unknown/@unknown" when fields move (legacy, result, data.*)
 function normalizeUser(json) {
+    // Check for error responses first
+    if (json.error || json.errors) {
+        console.error('❌ API returned error:', json.error || json.errors);
+        throw new Error(json.message || json.errors?.[0]?.message || 'User not found');
+    }
+    
+    console.log('📊 Normalizing user data. Response keys:', Object.keys(json || {}));
+    console.log('📊 Full response structure (first 1000 chars):', JSON.stringify(json, null, 2).substring(0, 1000));
+    
+    // Try multiple paths to find user data (Twitter API can return data in various structures)
     const candidates = [
         json,
         dget(json, 'result'),
         dget(json, 'user'),
         dget(json, 'data.user'),
         dget(json, 'data.user.result'),
+        dget(json, 'result.data.user'),
+        dget(json, 'result.data.user.result'),
+        dget(json, 'result.data.user_by_screen_name'),
+        dget(json, 'result.data.user_by_screen_name.result'),
+        dget(json, 'result.user'),
+        dget(json, 'result.user.result'),
         dget(json, 'core.user_results.result'),
+        dget(json, 'user_results.result'),
     ].filter(Boolean);
 
     let u = null;
+    let userObj = null;
+    
+    // First, try to find a user object with legacy property
     for (const c of candidates) {
         if (dget(c, 'legacy')) {
+            userObj = c;
             u = c.legacy;
+            console.log('✅ Found user with legacy at path:', c === json ? 'root' : 'nested');
             break;
         }
         if (dget(c, 'user.legacy')) {
+            userObj = c;
             u = c.user.legacy;
+            console.log('✅ Found user.user.legacy');
             break;
         }
     }
 
+    // If no legacy found, check if the candidate itself has user-like properties
+    if (!u) {
+        for (const c of candidates) {
+            if (c && typeof c === 'object') {
+                // Check if this object looks like a user object (has screen_name or name)
+                if (c.screen_name || c.name || (c.legacy && (c.legacy.screen_name || c.legacy.name))) {
+                    if (c.legacy) {
+                        userObj = c;
+                        u = c.legacy;
+                    } else {
+                        userObj = c;
+                        u = c;
+                    }
+                    console.log('✅ Found user-like object');
+                    break;
+                }
+            }
+        }
+    }
+
+    // Check globalObjects (legacy Twitter API format)
     if (!u && dget(json, 'globalObjects.users')) {
         const users = dget(json, 'globalObjects.users');
         const first = Object.values(users)[0];
-        if (first) u = first;
+        if (first) {
+            u = first.legacy || first;
+            userObj = first;
+            console.log('✅ Found user in globalObjects.users');
+        }
+    }
+
+    // Last resort: DFS to find any object with screen_name or name
+    if (!u) {
+        const found = findFirst(json, o => {
+            if (!o || typeof o !== 'object') return false;
+            return ('screen_name' in o && o.screen_name) || 
+                   ('name' in o && o.name) ||
+                   (o.legacy && ('screen_name' in o.legacy || 'name' in o.legacy));
+        });
+        if (found) {
+            if (found.legacy) {
+                u = found.legacy;
+                userObj = found;
+            } else {
+                u = found;
+                userObj = found;
+            }
+            console.log('✅ Found user via DFS');
+        }
     }
 
     if (!u) {
-        const found = findFirst(json, o => ('screen_name' in o) || ('name' in o));
-        if (found) u = found;
+        console.error('❌ Could not find user data in response');
+        console.error('Response structure:', JSON.stringify(json, null, 2).substring(0, 2000));
+        throw new Error('User not found - could not parse user data from API response');
     }
 
-    const name = dget(u, 'name') || dget(json, 'user.name') || '';
-    const username = dget(u, 'screen_name') || dget(json, 'user.screen_name') || '';
-    // name / handle already resolved above – extend avatar + description fallbacks:
+    // Extract user data from the found user object
+    const name = dget(u, 'name') || 
+                 dget(userObj, 'name') ||
+                 dget(json, 'result.data.user.result.legacy.name') ||
+                 dget(json, 'result.data.user_by_screen_name.result.legacy.name') ||
+                 '';
+    
+    const username = dget(u, 'screen_name') || 
+                     dget(userObj, 'screen_name') ||
+                     dget(json, 'result.data.user.result.legacy.screen_name') ||
+                     dget(json, 'result.data.user_by_screen_name.result.legacy.screen_name') ||
+                     '';
+    
+    if (!username) {
+        console.error('❌ Could not extract username from user data');
+        console.error('User object keys:', Object.keys(u || {}));
+        console.error('UserObj keys:', Object.keys(userObj || {}));
+        throw new Error('User not found - could not extract username');
+    }
+    
+    // Extract avatar
     const avatar =
         dget(u, 'profile_image_url_https') ||
         dget(u, 'profile_image_url') ||
+        dget(userObj, 'profile_image_url_https') ||
+        dget(userObj, 'profile_image_url') ||
         dget(json, 'result.data.user.result.avatar.image_url') ||
+        dget(json, 'result.data.user_by_screen_name.result.avatar.image_url') ||
         dget(json, 'user.avatar.image_url') || '';
+    
+    // Extract description
     const description =
         dget(u, 'description') ||
+        dget(userObj, 'description') ||
         dget(json, 'result.data.user.result.legacy.description') ||
+        dget(json, 'result.data.user_by_screen_name.result.legacy.description') ||
         dget(json, 'user.description') || '';
-    const verified = !!(dget(u, 'verified') || dget(u, 'is_blue_verified'));
+    
+    // Extract verified status
+    const verified = !!(dget(u, 'verified') || 
+                       dget(u, 'is_blue_verified') ||
+                       dget(userObj, 'verified') ||
+                       dget(userObj, 'is_blue_verified') ||
+                       dget(json, 'result.data.user.result.is_blue_verified') ||
+                       dget(json, 'result.data.user_by_screen_name.result.is_blue_verified'));
 
-    // Probe for metrics in multiple places to avoid zeros on valid users
-    const tweets     = dget(u, 'statuses_count') ??
-                       dget(json, 'result.data.user.result.legacy.statuses_count') ??
-                       dget(json, 'user.legacy.statuses_count');
-    const followers  = dget(u, 'followers_count') ??
-                       dget(json, 'result.data.user.result.legacy.followers_count');
-    const following  = dget(u, 'friends_count') ??
-                       dget(json, 'result.data.user.result.legacy.friends_count');
+    // Extract metrics
+    const tweets = dget(u, 'statuses_count') ??
+                   dget(userObj, 'statuses_count') ??
+                   dget(json, 'result.data.user.result.legacy.statuses_count') ??
+                   dget(json, 'result.data.user_by_screen_name.result.legacy.statuses_count') ??
+                   dget(json, 'user.legacy.statuses_count') ??
+                   0;
+    
+    const followers = dget(u, 'followers_count') ??
+                      dget(userObj, 'followers_count') ??
+                      dget(json, 'result.data.user.result.legacy.followers_count') ??
+                      dget(json, 'result.data.user_by_screen_name.result.legacy.followers_count') ??
+                      0;
+    
+    const following = dget(u, 'friends_count') ??
+                      dget(userObj, 'friends_count') ??
+                      dget(json, 'result.data.user.result.legacy.friends_count') ??
+                      dget(json, 'result.data.user_by_screen_name.result.legacy.friends_count') ??
+                      0;
+    
     const favourites = dget(u, 'favourites_count') ??
                        dget(u, 'favouritesCount') ??
-                       dget(json, 'result.data.user.result.legacy.favourites_count');
+                       dget(userObj, 'favourites_count') ??
+                       dget(json, 'result.data.user.result.legacy.favourites_count') ??
+                       dget(json, 'result.data.user_by_screen_name.result.legacy.favourites_count') ??
+                       0;
+
+    console.log('✅ Normalized user:', { name, username, verified, tweets, followers, following });
 
     return {
         name,
@@ -239,7 +358,7 @@ function normalizeUser(json) {
         description,
         avatar,
         verified,
-        metrics: { tweets, followers, following, favourites }
+        metrics: { tweets: tweets || 0, followers: followers || 0, following: following || 0, favourites: favourites || 0 }
     };
 }
 
@@ -573,14 +692,33 @@ let currentUsername = '';
 document.getElementById('get-user-btn').addEventListener('click', async () => {
     const username = document.getElementById('username-input').value.trim();
     const container = document.getElementById('user-profile');
-    if (!username) { showError(container, 'Please enter a username'); return; }
+    if (!username) { 
+        showError(container, 'Please enter a username'); 
+        return; 
+    }
     currentUsername = username;
     showLoading(container);
     try {
+        console.log(`🔍 Fetching user profile for: ${username}`);
         const data = await fetchFromAPI('/user', { username });
+        console.log('📊 Raw user API response:', data);
+        
+        if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+            throw new Error('Empty response from API');
+        }
+        
         const normalized = normalizeUser(data);
+        console.log('✅ Normalized user data:', normalized);
+        
+        if (!normalized || !normalized.username) {
+            throw new Error('Could not extract user information from API response');
+        }
+        
         renderUserCard(normalized, container);
-    } catch (error) { showError(container, error.message); }
+    } catch (error) { 
+        console.error('❌ Error fetching user profile:', error);
+        showError(container, error.message || 'User not found'); 
+    }
 });
 
 async function getUserContent(type) {
