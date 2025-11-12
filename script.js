@@ -656,6 +656,7 @@ function extractTweetsFromResponse(data) {
                 for (const e of candEntries) {
                     if (!e || typeof e !== 'object') continue;
                     // Try multiple paths to find tweet
+                    // Check if this entry has tweet-like content
                     const tweetNode = 
                         e.content?.itemContent?.tweet_results?.result ||
                         e.content?.itemContent?.tweet_results ||
@@ -667,8 +668,18 @@ function extractTweetsFromResponse(data) {
                         (e.content?.itemContent?.tweetDisplayType === 'Tweet' ? e.content?.itemContent : null);
                     
                     if (tweetNode) {
-                        const final = tweetNode.result || tweetNode;
-                        if (final) tweets.push(final);
+                        // Unwrap the tweet node - it might be wrapped in result
+                        let final = tweetNode.result || tweetNode;
+                        // If final has legacy with full_text, it's a valid tweet
+                        // If final has full_text directly, it's also valid
+                        // If final has tweet property, unwrap further
+                        if (final.tweet) {
+                            final = final.tweet.result || final.tweet;
+                        }
+                        // Make sure we have a tweet-like object
+                        if (final && (final.legacy || final.full_text || final.text || final.__typename === 'Tweet')) {
+                            tweets.push(final);
+                        }
                     }
                 }
                 console.log(`  - Extracted ${tweets.length} tweets from instructions`);
@@ -1781,52 +1792,86 @@ document.getElementById('get-community-members-btn').addEventListener('click', a
         const data = await fetchFromAPI('/community-members', { communityId });
         console.log('📊 Community members response:', Object.keys(data || {}));
         
-        // Extract users using buildUsersIndexDeep
-        const usersIdx = buildUsersIndexDeep(data);
-        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
-        
-        // Convert index to users array
-        let users = Object.values(usersIdx).map(u => {
-            const legacy = u.legacy || u;
-            return {
-                rest_id: u.rest_id || legacy.id_str || u.id_str || u.id,
-                legacy: legacy
-            };
-        }).filter(u => u.legacy && u.legacy.screen_name); // Only keep users with screen_name
-        
-        // Also extract from timeline instructions (combine both approaches)
+        // Extract users from timeline instructions (primary method for members)
         const instructions = dget(data, 'result.timeline.instructions') || [];
         console.log(`📋 Found ${instructions.length} timeline instructions`);
-        const seenUserIds = new Set(users.map(u => u.rest_id).filter(Boolean));
+        const users = [];
+        const seenUserIds = new Set();
         
+        // Extract from timeline instructions - this is the main source for members
         for (const ins of instructions) {
-            // Check all possible entry paths
+            if (!ins || typeof ins !== 'object') continue;
+            // Check all instruction types, not just TimelineAddEntries
             const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
             for (const e of entries) {
                 if (!e || typeof e !== 'object') continue;
-                // Try multiple paths for user results
+                // Check for timeline modules with user items (for members/moderators)
+                if (e.content?.entryType === 'TimelineTimelineModule' && e.content.items) {
+                    for (const item of e.content.items) {
+                        if (!item || typeof item !== 'object') continue;
+                        // Try multiple paths to get user from item
+                        const user = dget(item, 'item.itemContent.user_results.result') || 
+                                   dget(item, 'itemContent.user_results.result') ||
+                                   item.item?.itemContent?.user_results?.result ||
+                                   item.itemContent?.user_results?.result;
+                        if (user && typeof user === 'object') {
+                            // Get legacy - it might be nested or direct
+                            const legacy = user.legacy || user;
+                            const uid = user.rest_id || legacy.id_str || user.id || legacy.id;
+                            const uidStr = uid ? String(uid) : null;
+                            const screenName = legacy.screen_name || user.screen_name;
+                            if (uidStr && screenName && !seenUserIds.has(uidStr)) {
+                                seenUserIds.add(uidStr);
+                                users.push({
+                                    rest_id: uidStr,
+                                    legacy: legacy,
+                                    user: user // Keep full user object
+                                });
+                            }
+                        }
+                    }
+                }
+                // Also check direct user results in entries (for other structures)
                 const userPaths = [
                     dget(e, 'content.itemContent.user_results.result'),
-                    dget(e, 'content.user_results.result'),
-                    dget(e, 'itemContent.user_results.result'),
-                    dget(e, 'user_results.result'),
                     e.content?.itemContent?.user_results?.result,
-                    e.content?.user_results?.result,
-                    e.itemContent?.user_results?.result,
-                    e.user_results?.result,
                 ];
                 for (const ur of userPaths) {
                     if (!ur || typeof ur !== 'object') continue;
-                    const uid = ur.rest_id || ur.id_str || ur.id || ur.legacy?.id_str || ur.legacy?.id;
-                    if (!uid || seenUserIds.has(String(uid))) continue;
                     const legacy = ur.legacy || ur;
-                    if (legacy.screen_name) {
-                        seenUserIds.add(String(uid));
+                    const uid = ur.rest_id || legacy.id_str || ur.id || legacy.id;
+                    const uidStr = uid ? String(uid) : null;
+                    const screenName = legacy.screen_name || ur.screen_name;
+                    if (uidStr && screenName && !seenUserIds.has(uidStr)) {
+                        seenUserIds.add(uidStr);
                         users.push({
-                            rest_id: String(uid),
-                            legacy: legacy
+                            rest_id: uidStr,
+                            legacy: legacy,
+                            user: ur
                         });
                     }
+                }
+            }
+        }
+        
+        // Fallback: use buildUsersIndexDeep if no users found
+        if (users.length === 0) {
+            console.log('⚠️ No users from timeline, trying buildUsersIndexDeep...');
+            const usersIdx = buildUsersIndexDeep(data);
+            console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+            // buildUsersIndexDeep stores legacy objects directly
+            for (const [uid, legacyObj] of Object.entries(usersIdx)) {
+                if (!legacyObj || typeof legacyObj !== 'object') continue;
+                // legacyObj is already the legacy object from buildUsersIndexDeep
+                const legacy = legacyObj.legacy || legacyObj;
+                const screenName = legacy.screen_name || legacyObj.screen_name;
+                if (screenName && !seenUserIds.has(uid)) {
+                    seenUserIds.add(uid);
+                    users.push({
+                        rest_id: uid,
+                        legacy: legacy,
+                        user: { rest_id: uid, legacy: legacy }
+                    });
                 }
             }
         }
@@ -1856,52 +1901,86 @@ document.getElementById('get-community-moderators-btn').addEventListener('click'
         const data = await fetchFromAPI('/community-moderators', { communityId });
         console.log('📊 Community moderators response:', Object.keys(data || {}));
         
-        // Extract users using buildUsersIndexDeep
-        const usersIdx = buildUsersIndexDeep(data);
-        console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
-        
-        // Convert index to users array
-        let users = Object.values(usersIdx).map(u => {
-            const legacy = u.legacy || u;
-            return {
-                rest_id: u.rest_id || legacy.id_str || u.id_str || u.id,
-                legacy: legacy
-            };
-        }).filter(u => u.legacy && u.legacy.screen_name); // Only keep users with screen_name
-        
-        // Also extract from timeline instructions (combine both approaches)
+        // Extract users from timeline instructions (primary method for moderators)
         const instructions = dget(data, 'result.timeline.instructions') || [];
         console.log(`📋 Found ${instructions.length} timeline instructions`);
-        const seenUserIds = new Set(users.map(u => u.rest_id).filter(Boolean));
+        const users = [];
+        const seenUserIds = new Set();
         
+        // Extract from timeline instructions - this is the main source for moderators
         for (const ins of instructions) {
-            // Check all possible entry paths
+            if (!ins || typeof ins !== 'object') continue;
+            // Check all instruction types, not just TimelineAddEntries
             const entries = ins.entries || ins.addEntries || ins.moduleItems || [];
             for (const e of entries) {
                 if (!e || typeof e !== 'object') continue;
-                // Try multiple paths for user results
+                // Check for timeline modules with user items (for moderators)
+                if (e.content?.entryType === 'TimelineTimelineModule' && e.content.items) {
+                    for (const item of e.content.items) {
+                        if (!item || typeof item !== 'object') continue;
+                        // Try multiple paths to get user from item
+                        const user = dget(item, 'item.itemContent.user_results.result') || 
+                                   dget(item, 'itemContent.user_results.result') ||
+                                   item.item?.itemContent?.user_results?.result ||
+                                   item.itemContent?.user_results?.result;
+                        if (user && typeof user === 'object') {
+                            // Get legacy - it might be nested or direct
+                            const legacy = user.legacy || user;
+                            const uid = user.rest_id || legacy.id_str || user.id || legacy.id;
+                            const uidStr = uid ? String(uid) : null;
+                            const screenName = legacy.screen_name || user.screen_name;
+                            if (uidStr && screenName && !seenUserIds.has(uidStr)) {
+                                seenUserIds.add(uidStr);
+                                users.push({
+                                    rest_id: uidStr,
+                                    legacy: legacy,
+                                    user: user // Keep full user object
+                                });
+                            }
+                        }
+                    }
+                }
+                // Also check direct user results in entries (for other structures)
                 const userPaths = [
                     dget(e, 'content.itemContent.user_results.result'),
-                    dget(e, 'content.user_results.result'),
-                    dget(e, 'itemContent.user_results.result'),
-                    dget(e, 'user_results.result'),
                     e.content?.itemContent?.user_results?.result,
-                    e.content?.user_results?.result,
-                    e.itemContent?.user_results?.result,
-                    e.user_results?.result,
                 ];
                 for (const ur of userPaths) {
                     if (!ur || typeof ur !== 'object') continue;
-                    const uid = ur.rest_id || ur.id_str || ur.id || ur.legacy?.id_str || ur.legacy?.id;
-                    if (!uid || seenUserIds.has(String(uid))) continue;
                     const legacy = ur.legacy || ur;
-                    if (legacy.screen_name) {
-                        seenUserIds.add(String(uid));
+                    const uid = ur.rest_id || legacy.id_str || ur.id || legacy.id;
+                    const uidStr = uid ? String(uid) : null;
+                    const screenName = legacy.screen_name || ur.screen_name;
+                    if (uidStr && screenName && !seenUserIds.has(uidStr)) {
+                        seenUserIds.add(uidStr);
                         users.push({
-                            rest_id: String(uid),
-                            legacy: legacy
+                            rest_id: uidStr,
+                            legacy: legacy,
+                            user: ur
                         });
                     }
+                }
+            }
+        }
+        
+        // Fallback: use buildUsersIndexDeep if no users found
+        if (users.length === 0) {
+            console.log('⚠️ No users from timeline, trying buildUsersIndexDeep...');
+            const usersIdx = buildUsersIndexDeep(data);
+            console.log(`👥 Built users index with ${Object.keys(usersIdx).length} users`);
+            // buildUsersIndexDeep stores legacy objects directly
+            for (const [uid, legacyObj] of Object.entries(usersIdx)) {
+                if (!legacyObj || typeof legacyObj !== 'object') continue;
+                // legacyObj is already the legacy object from buildUsersIndexDeep
+                const legacy = legacyObj.legacy || legacyObj;
+                const screenName = legacy.screen_name || legacyObj.screen_name;
+                if (screenName && !seenUserIds.has(uid)) {
+                    seenUserIds.add(uid);
+                    users.push({
+                        rest_id: uid,
+                        legacy: legacy,
+                        user: { rest_id: uid, legacy: legacy }
+                    });
                 }
             }
         }
@@ -2627,37 +2706,223 @@ function displayTweets(tweets, container, title, ctx = {}) {
         container.innerHTML = `<h3>${title}</h3><p>No tweets found.</p>`;
         return;
     }
+    
+    console.log(`🎨 Displaying ${tweets.length} tweets`);
+    if (tweets.length > 0) {
+        const sample = tweets[0];
+        console.log('📝 Sample tweet keys:', Object.keys(sample || {}));
+        console.log('📝 Sample tweet (first 800 chars):', JSON.stringify(sample, null, 2).substring(0, 800));
+    }
+    
     container.innerHTML = `<h3>${title}</h3>${
-        tweets.map(t => {
-            const node = unwrapTweet(t);
-            const legacy = node.legacy || node;
+        tweets.map((t, idx) => {
+            // Unwrap tweet node - try multiple unwrapping strategies
+            let node = unwrapTweet(t);
+            if (!node) {
+                console.warn(`⚠️ Tweet ${idx} has no node after unwrap`);
+                return '';
+            }
+            
+            // Further unwrapping if needed
+            if (node.tweet) {
+                node = node.tweet.result || node.tweet;
+            }
+            if (node.result && node.result.legacy) {
+                node = node.result;
+            }
+            
+            // Try multiple paths for legacy object
+            let legacy = node.legacy;
+            if (!legacy) {
+                // Check if node itself is the legacy object (has full_text or created_at)
+                if (node.full_text || node.created_at || node.text || (node.favorite_count !== undefined)) {
+                    legacy = node;
+                } else {
+                    // Try nested paths
+                    legacy = node.tweet?.legacy || node.result?.legacy || node;
+                }
+            }
+            
+            if (!legacy) {
+                console.warn(`⚠️ Tweet ${idx} has no legacy object. Node keys:`, Object.keys(node || {}));
+                legacy = node; // Fallback to node itself
+            }
+            
+            // Try multiple paths for tweet text - be very aggressive
+            const text = 
+                legacy?.full_text || 
+                legacy?.text || 
+                node?.full_text || 
+                node?.text || 
+                dget(node, 'tweet.legacy.full_text') ||
+                dget(node, 'tweet.legacy.text') ||
+                dget(node, 'result.legacy.full_text') ||
+                dget(node, 'result.legacy.text') ||
+                dget(node, 'legacy.full_text') ||
+                dget(node, 'legacy.text') ||
+                (node.note_tweet?.note_tweet_results?.result?.text) ||
+                (node.note_tweet?.text) ||
+                '';
+            
+            // Try multiple paths for date
+            const dateRaw = 
+                legacy?.created_at || 
+                node?.created_at || 
+                dget(node, 'tweet.legacy.created_at') ||
+                dget(node, 'result.legacy.created_at') ||
+                dget(node, 'legacy.created_at') ||
+                '';
+            
+            // Try multiple paths for counts
+            const favoriteCount = 
+                legacy?.favorite_count || 
+                legacy?.favourites_count ||
+                node?.favorite_count || 
+                node?.favourites_count ||
+                dget(node, 'tweet.legacy.favorite_count') ||
+                dget(node, 'tweet.legacy.favourites_count') ||
+                dget(node, 'legacy.favorite_count') ||
+                dget(node, 'legacy.favourites_count') ||
+                0;
+            
+            const retweetCount = 
+                legacy?.retweet_count || 
+                node?.retweet_count || 
+                dget(node, 'tweet.legacy.retweet_count') ||
+                dget(node, 'legacy.retweet_count') ||
+                0;
+            
+            const replyCount = 
+                legacy?.reply_count || 
+                node?.reply_count || 
+                dget(node, 'tweet.legacy.reply_count') ||
+                dget(node, 'legacy.reply_count') ||
+                0;
+            
+            // Format date - handle Twitter date format
+            let dateStr = 'Unknown';
+            if (dateRaw) {
+                try {
+                    // Twitter dates are in format: "Tue Nov 30 14:10:47 +0000 2010"
+                    if (typeof dateRaw === 'string') {
+                        if (dateRaw.includes('+0000') || dateRaw.includes('GMT')) {
+                            const parsed = new Date(dateRaw);
+                            dateStr = isNaN(parsed.getTime()) ? dateRaw : parsed.toLocaleString();
+                        } else {
+                            // Try parsing as-is
+                            const parsed = new Date(dateRaw);
+                            dateStr = isNaN(parsed.getTime()) ? dateRaw : parsed.toLocaleString();
+                        }
+                    } else if (typeof dateRaw === 'number') {
+                        // Might be timestamp in milliseconds
+                        dateStr = new Date(dateRaw).toLocaleString();
+                    }
+                    if (dateStr === 'Invalid Date' || (dateRaw && isNaN(new Date(dateRaw).getTime()))) {
+                        dateStr = String(dateRaw);
+                    }
+                } catch (e) {
+                    console.warn(`⚠️ Date parsing error for tweet ${idx}:`, dateRaw, e);
+                    dateStr = String(dateRaw);
+                }
+            }
+            
+            // Resolve author
             const author = resolveAuthorFromTweet(t, ctx.usersIndex || {});
-            const text = legacy.full_text || legacy.text || node.full_text || node.text || '';
-            const date = legacy.created_at || node.created_at || 'Unknown';
+            
+            // Debug first tweet if no text
+            if (!text && idx === 0) {
+                console.warn('⚠️ First tweet has no text.');
+                console.warn('  Node keys:', Object.keys(node || {}));
+                console.warn('  Legacy keys:', Object.keys(legacy || {}));
+                console.warn('  Node has full_text:', !!node.full_text, 'legacy has full_text:', !!legacy?.full_text);
+                // Log the actual structure
+                console.warn('  Full node (first 1000 chars):', JSON.stringify(node, null, 2).substring(0, 1000));
+            }
+            
             return `<div class="tweet-card">
-        <p><strong>@${author.username}:</strong> ${text || 'No content'}</p>
+        <p><strong>@${esc(author.username)}:</strong> ${text ? esc(text.substring(0, 280)) : '<em style="color: #657786;">No content available</em>'}</p>
         <div class="tweet-footer">
-          <span>❤️ ${formatNumber(legacy.favorite_count || 0)}</span>
-          <span>🔁 ${formatNumber(legacy.retweet_count || 0)}</span>
-          <span>💬 ${formatNumber(legacy.reply_count || 0)}</span>
-          <span>📅 ${formatDate(date)}</span>
+          <span>❤️ ${formatNumber(favoriteCount)}</span>
+          <span>🔁 ${formatNumber(retweetCount)}</span>
+          <span>💬 ${formatNumber(replyCount)}</span>
+          <span>📅 ${esc(dateStr)}</span>
         </div>
       </div>`;
-        }).join('')
+        }).filter(Boolean).join('')
     }`;
 }
 
 function displayUsers(users, container, title) {
-    if (!users || users.length === 0) { container.innerHTML = `<h3>${title}</h3><p>No users found.</p>`; return; }
-    container.innerHTML = `<h3>${title}</h3>${users.map(user => {
-        const legacy = user.legacy || user;
-        return `<div class="user-card"><strong>@${legacy.screen_name}</strong> - ${legacy.name}
-            ${legacy.verified ? '<span class="badge badge-verified">✓</span>' : ''}
-            <br><small>${legacy.description || 'No description'}</small>
+    if (!users || users.length === 0) { 
+        container.innerHTML = `<h3>${title}</h3><p>No users found.</p>`; 
+        return; 
+    }
+    
+    console.log(`🎨 Displaying ${users.length} users`);
+    if (users.length > 0) {
+        console.log('👤 Sample user structure:', JSON.stringify(users[0], null, 2).substring(0, 500));
+    }
+    
+    container.innerHTML = `<h3>${title}</h3>${users.map((user, idx) => {
+        // Try multiple paths for legacy object
+        const legacy = user.legacy || user.user?.legacy || user.result?.legacy || user;
+        
+        // Try multiple paths for user data
+        const screenName = 
+            legacy.screen_name || 
+            user.screen_name ||
+            dget(user, 'user.legacy.screen_name') ||
+            dget(user, 'result.legacy.screen_name') ||
+            'unknown';
+        
+        const name = 
+            legacy.name || 
+            user.name ||
+            dget(user, 'user.legacy.name') ||
+            dget(user, 'result.legacy.name') ||
+            '';
+        
+        const description = 
+            legacy.description || 
+            user.description ||
+            dget(user, 'user.legacy.description') ||
+            dget(user, 'result.legacy.description') ||
+            '';
+        
+        const followersCount = 
+            legacy.followers_count || 
+            legacy.normal_followers_count ||
+            user.followers_count ||
+            dget(user, 'user.legacy.followers_count') ||
+            dget(user, 'user.legacy.normal_followers_count') ||
+            0;
+        
+        const statusesCount = 
+            legacy.statuses_count || 
+            user.statuses_count ||
+            dget(user, 'user.legacy.statuses_count') ||
+            0;
+        
+        const verified = 
+            legacy.verified || 
+            user.verified ||
+            dget(user, 'user.legacy.verified') ||
+            user.is_blue_verified ||
+            false;
+        
+        if (idx === 0 && !screenName) {
+            console.warn('⚠️ First user has no screen_name. User structure:', Object.keys(user || {}), 'Legacy keys:', Object.keys(legacy || {}));
+        }
+        
+        return `<div class="user-card">
+            <strong>@${esc(screenName)}</strong>${name ? ` - ${esc(name)}` : ''}
+            ${verified ? ' <span class="badge badge-verified">✓</span>' : ''}
+            ${description ? `<br><small>${esc(description)}</small>` : '<br><small style="color: #657786;">No description</small>'}
             <div class="tweet-footer">
-                <span>👥 ${formatNumber(legacy.followers_count || 0)} followers</span>
-                <span>📝 ${formatNumber(legacy.statuses_count || 0)} tweets</span>
-            </div></div>`;
+                <span>👥 ${formatNumber(followersCount)} followers</span>
+                <span>📝 ${formatNumber(statusesCount)} tweets</span>
+            </div>
+        </div>`;
     }).join('')}`;
 }
 
